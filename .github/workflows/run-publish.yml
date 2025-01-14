@@ -16,6 +16,8 @@ jobs:
       url: https://pypi.org/p/querymodelling
     permissions:
       id-token: write
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - name: Set up Python
