@@ -2,6 +2,7 @@ from datetime import datetime
 from sqlmodel import Session, select, func
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from typing import TypeVar, Sequence, Type, Callable, Concatenate, ParamSpec
+from pydantic import AliasChoices
 
 from .base import get_functions, DefaultSort
 from .fields import QueryField, SortField
@@ -19,25 +20,6 @@ def sortable_by(field):
         if order == "asc":
             return field.asc()
     return wrapper
-
-def ExtendedTextSearch(BaseField) -> Callable[
-        Concatenate[Callable, PK], T]:
-    def field_wrapper(field, *args, **kwargs):
-        def query(value):
-            if value.startswith("startswith:"):
-                return field.like(f"{value[11:]}%")
-            if value.startswith("endswith:"):
-                return field.like(f"%{value[9:]}")
-            if value.startswith("contains:"):
-                return field.like(f"%{value[9:]}%")
-            return field == value
-        return QueryField(BaseField)(
-            query,
-            *args,
-            pattern="^(?:(?:startswith:|endswith:|contains))?.+",
-            **kwargs
-        )
-    return field_wrapper
 
 def retrieve_entries(
     query: Q,
@@ -65,7 +47,42 @@ def retrieve_entries(
 
     return total_elements, session.exec(statement).all()
 
-def create_callback(base_field):
+def create_query_fields(
+    base_field: any,
+    field_name: str,
+    annotation: any,
+    operator_mapping: dict[str, Callable],
+    json_schema_extra: dict
+):   
+    for operator, operator_function in operator_mapping.items():
+        validation_alias = None
+        alias = None
+        if operator is None:
+            name = field_name
+        else:
+            name = f"{field_name}_{operator}"
+            alias = f"{field_name}.{operator}"
+            validation_alias = AliasChoices(name, alias)
+        yield (
+            name,
+            QueryField(base_field)(
+                operator_function,
+                alias=alias,
+                validation_alias=validation_alias,
+                default=None,
+                json_schema_extra=json_schema_extra | {
+                    "query.backend": "sql",
+                    "query.operator": operator
+                }
+            ),
+            annotation
+        )
+
+def create_callback(
+    base_field,
+    copy_field_properties: list[str] = None,
+    schema_extra: dict = None
+):
     def auto_create_callback(
         source_type: type,
         field_name: str,
@@ -73,40 +90,53 @@ def create_callback(base_field):
         field_info,
         annotation
     ):
+        if copy_field_properties is None and schema_extra is None:
+            json_schema_extra = field_info.json_schema_extra
+        json_schema_extra = schema_extra or {}
+        if copy_field_properties is not None:
+            for property_name in copy_field_properties:
+                json_schema_extra[property_name] = field_info[
+                    property_name]
+
         if annotation == str:
-            yield (
+            operator_mapping = {
+                None: lambda value: field == value,
+                "startswith": lambda value: field.like(f"{value}%"),
+                "endswith": lambda value: field.like(f"%{value}"),
+                "contains": lambda value: field.like(f"%{value}%")
+            }
+            yield from create_query_fields(
+                base_field,
                 field_name,
-                ExtendedTextSearch(base_field)(
-                    source_type.__dict__[field_name],
-                    default=None
-                ),
-                annotation
+                annotation,
+                operator_mapping,
+                json_schema_extra
             )
         elif annotation in (datetime, int):
-            yield (
-                f"from_{field_name}",
-                QueryField(base_field)(
-                    lambda value: source_type.__dict__[field_name] >= value,
-                    alias=f"{field_name}.from",
-                    default=None
-                ),
-                annotation
-            )
-            yield (
-                f"to_{field_name}",
-                QueryField(base_field)(
-                    lambda value: source_type.__dict__[field_name] <= value,
-                    alias=f"{field_name}.to",
-                    default=None
-                ),
-                annotation
-            )
+            operator_mapping = {
+                None: lambda value: field == value,
+                "from": lambda value: field >= value,
+                "to": lambda value: field <= value
+            }
+            yield from create_query_fields(
+                base_field,
+                field_name,
+                annotation,
+                operator_mapping,
+                json_schema_extra
+            ) 
+        sort_name = f"sort_{field_name}"
+        sort_name_dot = f"sort.{field_name}"
         yield (
-            f"sort_{field_name}",
+            sort_name_dot,
             SortField(base_field)(
                 sortable_by(source_type.__dict__[field_name]),
-                alias=f"sort_{field_name}",
-                default=None
+                alias=sort_name_dot,
+                validation_alias=AliasChoices(sort_name, sort_name_dot),
+                default=None,
+                json_schema_extra=json_schema_extra | {
+                    "query.backend": "sql"
+                }
             ),
             DefaultSort
         )
