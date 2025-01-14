@@ -1,7 +1,13 @@
 {
-    "workbench.colorCustomizations": {
-        "activityBar.background": "#32235C",
-        "titleBar.activeBackground": "#463181",
-        "titleBar.activeForeground": "#FDFCFE"
-    }
+    "editor.tabSize": 4,
+    "[python]": {
+        "editor.tabSize": 4,
+        
+        /* 
+        Maximum line length PEP8
+        https://peps.python.org/pep-0008/#:~:text=spaces%20for%20indentation.-,Maximum%20Line%20Length,be%20limited%20to%2072%20characters 
+        */
+        "editor.rulers": [79]
+    },
+    "autoDocstring.docstringFormat": "sphinx"
 }
