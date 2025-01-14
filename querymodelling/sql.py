@@ -16,6 +16,8 @@ def sortable_by(field):
     def wrapper(order: DefaultSort):
         if order == "desc":
             return field.desc()
+        if order == "asc":
+            return field.asc()
     return wrapper
 
 def ExtendedTextSearch(BaseField) -> Callable[

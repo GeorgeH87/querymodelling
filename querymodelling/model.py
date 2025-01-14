@@ -11,4 +11,3 @@ class PageQuery:
     @property
     def offset_end(self):
         return self.offset + self.size
-    

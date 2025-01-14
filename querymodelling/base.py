@@ -1,7 +1,8 @@
 from pydantic import BaseModel, create_model, Field
 from pydantic.fields import FieldInfo
 from typing import (
-    TypeVar, Literal, Type, Callable, Dict, Tuple, Any, get_origin, Optional, Union, get_args, Generic, ParamSpecArgs, TypeVarTuple, Unpack, Self
+    TypeVar, Literal, Type, Callable, Dict, Tuple, Any, get_origin, Optional,
+    Union, get_args, Generator
 )
 
 from .model import PageQuery
@@ -21,7 +22,7 @@ def get_functions(model: BaseModel, function_type: str):
             queries.append(function(getattr(model, name)))
     return queries
 
-A = TypeVar("A", )
+A = TypeVar("A")
 
 def optional_fields(
     base_model: BaseModel,
@@ -47,9 +48,7 @@ def optional_fields(
     return fields
 
 T = TypeVar("T", bound=BaseModel)
-Ts = TypeVarTuple("Ts")
 C = TypeVar("C", bound=Union[PageQuery, BaseModel])
-
 
 def parse_field(input_field: FieldInfo) -> FieldInfo:
     data = {
@@ -61,21 +60,36 @@ def parse_field(input_field: FieldInfo) -> FieldInfo:
     return Field(**data)
 
 def AutoQueryModel(
-    base_models: Type[A] | list[Type[A]],
+    base_models: Type[T] | list[Type[T]],
     base_query_models: Type[C] | list[Type[C]],
-    callback: Callable[[type, str, any, FieldInfo], FieldInfo],
+    callback: Callable[
+        [type, str, any, FieldInfo],
+        Generator[Tuple[Type, str, Any, FieldInfo, Any], None, None]
+    ],
     exclude_fields: list[str] = None,
     include_fields: list[str] = None
 ) -> Type[A]:
-    """_summary_
+    """Automatic generates a query model based on the fields of the base query 
+    models. The newly generated model will have the same fields as the base 
+    query models, but with the option to modify the fields using the callback 
+    function or using the exclude- and include- fields parameters. The 
+    callback function will be called for each field of the base query models 
+    and should return a tuple with the field name, the field info and the 
+    annotation of the field. The exclude- and include- fields parameters can 
+    be used to exclude or include specific fields from the base query models. 
+    On the other hand the newly generated model will inherit from the defined 
+    base models.
 
-    :param base_models: _description_
+    :param base_models: The base models to inherit from.
     :type base_models: Type[A] | list[Type[A]]
-    :param base_query_models: _description_
+    :param base_query_models: The base query models to generate the query 
+        model from.
     :type base_query_models: Type[C] | list[Type[C]]
-    :param callback: _description_
-    :type callback: Callable[[type, str, any, FieldInfo], FieldInfo]
-    :param exclude_fields: _description_, defaults to None
+    :param callback: The callback function to modify the fields of the base
+        query models.
+    :type callback: Callable[[type, str, any, FieldInfo], 
+        Generator[Tuple[Type, str, Any, FieldInfo, Any], None, None]]
+    :param exclude_fields: , defaults to None
     :type exclude_fields: list[str], optional
     :param include_fields: _description_, defaults to None
     :type include_fields: list[str], optional
