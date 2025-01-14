@@ -1,0 +1,24 @@
+[tool.isort]
+profile = "black"
+src_paths = ["querymodelling", "tests"]
+honor_noqa = true
+
+[tool.pytest.ini_options]
+addopts = "--doctest-modules"
+doctest_optionflags = "NORMALIZE_WHITESPACE ELLIPSIS"
+minversion = "6.2"
+testpaths = ["tests"]
+
+[project]
+name = "querymodelling"
+version = "0.0.1"
+description = "build consistent api query models for fastapi"
+readme = "README.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "George Haddad", email = "georgeh87@live.de" },
+]
+dependencies = [
+    "pydantic >= 2.10.5"
+]
+license = { file = "LICENSE" }

@@ -1,0 +1,10 @@
+__title__ = "querymodelling"
+__description__ = ""
+__url__ = "https://querymodelling.readthedocs.io"
+__version__ = "0.0.1"
+__build__ = 0x023100
+__author__ = "George Haddad"
+__author_email__ = "georgeh87@live.de"
+__license__ = "Apache-2.0"
+__copyright__ = "Copyright George Haddad"
+__cake__ = "\u2728 \U0001f370 \u2728"
