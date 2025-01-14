@@ -1,29 +1,11 @@
-from math import ceil
 from pydantic import BaseModel, create_model, Field
 from pydantic.fields import FieldInfo
 from typing import (
     TypeVar, Literal, Type, Callable, Dict, Tuple, Any, get_origin, Optional, Union, get_args, Generic, ParamSpecArgs, TypeVarTuple, Unpack, Self
 )
-from abc import ABC, abstractmethod
 
 from .model import PageQuery
-from app.models.paging import Page
 
-
-T = TypeVar("T")
-Q = TypeVar("Q", bound=PageQuery)
-
-def paginate_entries(
-    query: Q,
-    entries: list[T],
-    total_elements: int,
-) -> Page[T]:
-    return Page(
-        content = entries,
-        total_pages = ceil(total_elements / query.size),
-        total_elements = total_elements,
-        current_page = query.page
-    )
 
 def get_function(field: FieldInfo, function_type: str):
     for meta in field.metadata:
@@ -125,13 +107,12 @@ def AutoQueryModel(
                     for annotation in get_args(field.annotation):
                         if annotation is not type(None):
                             pure_annotation = annotation
-    
-                if callback:
-                    generator = callback(
-                        base_query_model, name, value, field, pure_annotation)
-                    if generator:
-                        for name, field_info, annotation in generator:
-                            fields[name] = (Optional[annotation], field_info)
+
+                generator = callback(
+                    base_query_model, name, value, field, pure_annotation)
+                if generator:
+                    for name, field_info, annotation in generator:
+                        fields[name] = (Optional[annotation], field_info)
 
     model = create_model(
         class_name + "QueryModel",
