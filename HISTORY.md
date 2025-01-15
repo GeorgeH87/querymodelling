@@ -1,6 +1,12 @@
 Release History
 ===============
 
+0.0.2 (2024-01-15)
+------------------
+
+-   support of dot name alias
+-   use a separate field for each operator
+
 0.0.1 (2024-01-13)
 ------------------
 
