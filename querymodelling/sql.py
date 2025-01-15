@@ -1,7 +1,7 @@
 from datetime import datetime
 from sqlmodel import Session, select, func
 from sqlalchemy.orm.attributes import InstrumentedAttribute
-from typing import TypeVar, Sequence, Type, Callable, Concatenate, ParamSpec
+from typing import TypeVar, Sequence, Type, Callable, ParamSpec
 from pydantic import AliasChoices
 
 from .base import get_functions, DefaultSort
