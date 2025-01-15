@@ -21,7 +21,7 @@ def sortable_by(field):
             return field.asc()
     return wrapper
 
-def retrieve_entries(
+def retrieve_paged_entries(
     query: Q,
     session: Session,
     t: Type[T],
@@ -47,6 +47,20 @@ def retrieve_entries(
 
     return total_elements, session.exec(statement).all()
 
+def retrieve_entries(
+    query: Q,
+    session: Session,
+    t: Type[T]
+) -> tuple[int, Sequence[T]]:
+    search_clause = get_functions(query, "query")
+    order_clause = get_functions(query, "sort")
+    statement = select(t)
+    if search_clause:
+        statement = statement.where(*search_clause)
+    if order_clause:
+        statement = statement.order_by(*order_clause)
+    return session.exec(statement).all()
+
 def create_query_fields(
     base_field: any,
     field_name: str,
@@ -71,7 +85,6 @@ def create_query_fields(
                 validation_alias=validation_alias,
                 default=None,
                 json_schema_extra=json_schema_extra | {
-                    "query.backend": "sql",
                     "query.operator": operator
                 }
             ),
@@ -98,9 +111,14 @@ def create_callback(
                 json_schema_extra[property_name] = field_info[
                     property_name]
 
+        json_schema_extra = json_schema_extra | {
+            "query.backend": "sql"
+        }
+
         if annotation == str:
             operator_mapping = {
                 None: lambda value: field == value,
+                "not": lambda value: field != value,
                 "startswith": lambda value: field.like(f"{value}%"),
                 "endswith": lambda value: field.like(f"%{value}"),
                 "contains": lambda value: field.like(f"%{value}%")
@@ -116,7 +134,8 @@ def create_callback(
             operator_mapping = {
                 None: lambda value: field == value,
                 "from": lambda value: field >= value,
-                "to": lambda value: field <= value
+                "to": lambda value: field <= value,
+                "not": lambda value: field != value
             }
             yield from create_query_fields(
                 base_field,
@@ -124,7 +143,7 @@ def create_callback(
                 annotation,
                 operator_mapping,
                 json_schema_extra
-            ) 
+            )
         sort_name = f"sort_{field_name}"
         sort_name_dot = f"sort.{field_name}"
         yield (
@@ -134,9 +153,7 @@ def create_callback(
                 alias=sort_name_dot,
                 validation_alias=AliasChoices(sort_name, sort_name_dot),
                 default=None,
-                json_schema_extra=json_schema_extra | {
-                    "query.backend": "sql"
-                }
+                json_schema_extra=json_schema_extra
             ),
             DefaultSort
         )
