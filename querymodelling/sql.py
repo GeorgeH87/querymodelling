@@ -4,6 +4,7 @@ from sqlalchemy.orm.attributes import InstrumentedAttribute
 from typing import TypeVar, Sequence, Type, Callable, ParamSpec
 from pydantic import AliasChoices
 
+from .__helper__ import is_enum
 from .base import get_functions, DefaultSort
 from .fields import QueryField, SortField
 from .model import PageQuery
@@ -135,6 +136,18 @@ def create_callback(
                 None: lambda value: field == value,
                 "from": lambda value: field >= value,
                 "to": lambda value: field <= value,
+                "not": lambda value: field != value
+            }
+            yield from create_query_fields(
+                base_field,
+                field_name,
+                annotation,
+                operator_mapping,
+                json_schema_extra
+            )
+        elif is_enum(annotation):
+            operator_mapping = {
+                None: lambda value: field == value,
                 "not": lambda value: field != value
             }
             yield from create_query_fields(
