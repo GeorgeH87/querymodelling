@@ -113,7 +113,8 @@ def create_callback(
                     property_name]
 
         json_schema_extra = json_schema_extra | {
-            "query.backend": "sql"
+            "query.backend": "sql",
+            "query.field": field_name,
         }
 
         if annotation == str:
