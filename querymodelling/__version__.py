@@ -1,7 +1,7 @@
 __title__ = "querymodelling"
 __description__ = ""
 __url__ = "https://querymodelling.readthedocs.io"
-__version__ = "0.0.4"
+__version__ = "0.0.5"
 __build__ = 0x023100
 __author__ = "George Haddad"
 __author_email__ = "georgeh87@live.de"

@@ -1,7 +1,12 @@
 Release History
 ===============
 
-0.0.4 (2024-02-11)
+0.0.5 (2025-02-28)
+------------------
+
+-   sql: add name field to meta data
+
+0.0.4 (2025-02-11)
 ------------------
 
 -   sql: support for enums
