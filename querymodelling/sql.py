@@ -2,7 +2,6 @@ from datetime import datetime
 from sqlmodel import Session, select, func
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from typing import TypeVar, Sequence, Type, Callable, ParamSpec
-from pydantic import AliasChoices
 
 from .__helper__ import is_enum
 from .base import get_functions, DefaultSort
@@ -70,20 +69,14 @@ def create_query_fields(
     json_schema_extra: dict
 ):   
     for operator, operator_function in operator_mapping.items():
-        validation_alias = None
-        alias = None
         if operator is None:
             name = field_name
         else:
             name = f"{field_name}_{operator}"
-            alias = f"{field_name}.{operator}"
-            validation_alias = AliasChoices(name, alias)
         yield (
             name,
             QueryField(base_field)(
                 operator_function,
-                alias=alias,
-                validation_alias=validation_alias,
                 default=None,
                 json_schema_extra=json_schema_extra | {
                     "query.operator": operator
@@ -158,14 +151,10 @@ def create_callback(
                 operator_mapping,
                 json_schema_extra
             )
-        sort_name = f"sort_{field_name}"
-        sort_name_dot = f"sort.{field_name}"
         yield (
-            sort_name_dot,
+            f"sort_{field_name}",
             SortField(base_field)(
                 sortable_by(source_type.__dict__[field_name]),
-                alias=sort_name_dot,
-                validation_alias=AliasChoices(sort_name, sort_name_dot),
                 default=None,
                 json_schema_extra=json_schema_extra
             ),

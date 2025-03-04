@@ -1,6 +1,12 @@
 Release History
 ===============
 
+0.0.6 (2025-03-04)
+------------------
+
+-   sql: remove dot name alias again
+    since they are producing a lot of side effects
+
 0.0.5 (2025-02-28)
 ------------------
 
