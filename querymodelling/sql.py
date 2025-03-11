@@ -88,14 +88,15 @@ def create_query_fields(
 def create_callback(
     base_field,
     copy_field_properties: list[str] = None,
-    schema_extra: dict = None
+    schema_extra: dict = None,
+    use_alias_reference: bool = True,
 ):
     def auto_create_callback(
         source_type: type,
         field_name: str,
         field,
         field_info,
-        annotation
+        annotation,
     ):
         if copy_field_properties is None and schema_extra is None:
             json_schema_extra = field_info.json_schema_extra
@@ -107,7 +108,10 @@ def create_callback(
 
         json_schema_extra = json_schema_extra | {
             "query.backend": "sql",
-            "query.field": field_name,
+            "query.field": (
+                (field_info.alias or field_name) 
+                if use_alias_reference else field_name
+            ),
         }
 
         if annotation == str:
