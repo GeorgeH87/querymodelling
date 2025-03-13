@@ -27,7 +27,8 @@ def create_statement(
     order_clause = get_functions(query, "sort")
     statement = t.find(*search_clause)
     if order_clause:
-        statement = statement.sort_by(*order_clause)
+        for order_clause in order_clause:
+            statement = statement.sort_by(order_clause)
     return statement
 
 def retrieve_paged_entries(
