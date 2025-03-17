@@ -89,8 +89,9 @@ def create_callback(
         annotation
     ):
         if copy_field_properties is None and schema_extra is None:
-            json_schema_extra = field_info.json_schema_extra
-        json_schema_extra = schema_extra or {}
+            json_schema_extra = field_info.json_schema_extra or {}
+        else:
+            json_schema_extra = schema_extra or {}
         if copy_field_properties is not None:
             for property_name in copy_field_properties:
                 json_schema_extra[property_name] = field_info[
