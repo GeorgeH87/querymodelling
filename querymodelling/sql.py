@@ -1,5 +1,6 @@
 from datetime import datetime
 from sqlmodel import Session, select, func
+from sqlmodel.sql.expression import Select
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from typing import TypeVar, Sequence, Type, Callable, ParamSpec
 
@@ -25,18 +26,31 @@ def retrieve_paged_entries(
     query: Q,
     session: Session,
     t: Type[T],
-    t_index: InstrumentedAttribute
+    t_index: InstrumentedAttribute,
+    supplement: Callable[[Select], Select] = None
 ) -> tuple[int, Sequence[T]]:
     search_clause = get_functions(query, "query")
     order_clause = get_functions(query, "sort")
-    total_elements = session.exec(select(func.count()).where(
-        *search_clause).select_from(t)).first()
+
+    count_statement = select(func.count()).where(
+        *search_clause).select_from(t)
+    
+    if supplement:
+        count_statement = supplement(count_statement)
+
+    total_elements = session.exec(count_statement).first()
 
     sub_statement = select(t_index)
+    
     if search_clause:
         sub_statement = sub_statement.where(*search_clause)
+    
     if order_clause:
         sub_statement = sub_statement.order_by(*order_clause)
+    
+    if supplement:
+        sub_statement = supplement(sub_statement)
+    
     sub_statement = sub_statement.limit(query.size).offset(
         query.page * query.size)
     sub_query = sub_statement.subquery()

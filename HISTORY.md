@@ -1,6 +1,11 @@
 Release History
 ===============
 
+0.0.11 (2025-09-22)
+------------------
+
+-   sql: adding support for query supplements
+
 0.0.8 (2025-03-12)
 ------------------
 
