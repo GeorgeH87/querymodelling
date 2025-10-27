@@ -1,6 +1,10 @@
 Release History
 ===============
 
+0.0.12 (2025-10-27)
+
+-   sql: add support for filtering boolean fields
+
 0.0.11 (2025-09-22)
 ------------------
 
