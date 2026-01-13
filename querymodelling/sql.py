@@ -27,7 +27,8 @@ def retrieve_paged_entries(
     session: Session,
     t: Type[T],
     t_index: InstrumentedAttribute | list[InstrumentedAttribute],
-    supplement: Callable[[Select], Select] = None
+    supplement: Callable[[Select], Select] = None,
+    count: bool = True
 ) -> tuple[int, Sequence[T]]:
     search_clause = get_functions(query, "query")
     order_clause = get_functions(query, "sort")
@@ -38,7 +39,10 @@ def retrieve_paged_entries(
     if supplement:
         count_statement = supplement(count_statement)
 
-    total_elements = session.exec(count_statement).first()
+    if count:
+        total_elements = session.exec(count_statement).first()
+    else:
+        total_elements = -1
 
     if not isinstance(t_index, list):
         t_index = [t_index]
