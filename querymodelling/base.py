@@ -17,7 +17,7 @@ def get_function(field: FieldInfo, function_type: str):
 def get_functions(model: BaseModel, function_type: str):
     queries = []
     for name in model.model_fields_set:
-        field = model.model_fields[name]
+        field = model.__class__.model_fields[name]
         if function := get_function(field, function_type):
             queries.append(function(getattr(model, name)))
     return queries
@@ -31,7 +31,7 @@ def optional_fields(
     additional_fields: Dict[str, Tuple[Type, Any]] = None,
 ):
     fields = additional_fields or {}
-    for name, field in base_model.model_fields.items():
+    for name, field in base_model.__class__.model_fields.items():
         if (
             isinstance(field, FieldInfo)
             and (not exclude_fields or name not in exclude_fields)
