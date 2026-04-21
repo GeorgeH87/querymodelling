@@ -67,7 +67,7 @@ def retrieve_paged_entries(
             getattr(t, idx.key) == getattr(sub_query.c, idx.key)
             for idx in t_index
         ])
-    )
+    ).order_by(*order_clause)
 
     return total_elements, session.exec(statement).all()
 
