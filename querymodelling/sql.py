@@ -1,6 +1,6 @@
 from datetime import datetime
-from sqlmodel import Session, select, func, and_
 from sqlmodel.sql.expression import Select
+from sqlmodel import Session, select, func, and_, or_
 from sqlalchemy.orm.attributes import InstrumentedAttribute
 from typing import TypeVar, Sequence, Type, Callable, ParamSpec
 
@@ -64,7 +64,13 @@ def retrieve_paged_entries(
 
     statement = select(t).join(
         sub_query, and_(*[
-            getattr(t, idx.key) == getattr(sub_query.c, idx.key)
+            or_(
+                getattr(t, idx.key) == getattr(sub_query.c, idx.key),
+                and_(
+                    getattr(t, idx.key).is_(None),
+                    getattr(sub_query.c, idx.key).is_(None)
+                )
+            )
             for idx in t_index
         ])
     ).order_by(*order_clause)
