@@ -48,7 +48,13 @@ def retrieve_paged_entries(
         t_index = [t_index]
 
     sub_statement = select(*t_index)
-    
+
+    if order_clause:
+        order_clause = [
+            *order_clause,
+            *[index.asc() for index in t_index]
+        ]
+
     if search_clause:
         sub_statement = sub_statement.where(*search_clause)
     
