@@ -60,6 +60,10 @@ class SqlFilterTest(unittest.TestCase):
             session.add_all(FilterExample(**row) for row in ROWS)
             session.commit()
 
+    @classmethod
+    def tearDownClass(cls):
+        cls.engine.dispose()
+
     def ids(self, data: dict, model: type[SqlFilter] = ExampleFilter):
         sql_filter = model.model_validate(data)
         with Session(self.engine) as session:

@@ -7,6 +7,9 @@ Release History
 -   sql_filter: add typed, nested and generator based SQL filter models
     (``SqlFilterModel``) with ``and`` / ``or`` / ``not``, typed operators,
     SQL functions and JSON schema support
+-   sql_query: add typed, generator based SQL query models
+    (``SqlQueryModel``) with ``fields`` (field names, SQL functions,
+    aliases), ``where`` and ``group_by`` incl. typed result models
 
 0.0.12 (2025-10-27)
 

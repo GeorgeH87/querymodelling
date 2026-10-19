@@ -89,3 +89,79 @@ class ExampleQuery(PageQuery, BaseModel):
         sql_filter_expression, default=None)
 ```
 
+
+### Typed SQL query models
+
+`SqlQueryModel` extends the filter by selectable `fields` (incl. SQL
+functions), `where` (the filter above) and `group_by`. All expressions are
+typed per result type and reflected in the JSON schema.
+
+```python
+from querymodelling.sql_query import SqlQueryModel
+
+ExampleQuery = SqlQueryModel(ExampleModel)
+
+query = ExampleQuery.model_validate({
+    "fields": [
+        "name",
+        {"field": "id", "alias": "my_id"},
+        {"count": "id", "alias": "count_id"},
+        {"lower": "name"},
+        {"concat": ["name", {"value": " - "}, "description"]},
+    ],
+    "where": {"name": {"contains": "wurst"}},
+    "group_by": ["name", "id", "description"],
+})
+statement = query.to_select()      # SQLAlchemy select with labeled columns
+rows = query.fetch(session)        # list of typed result rows
+RowModel = query.result_model()    # e.g. {"name": str, "count_id": int, ...}
+```
+
+* An entry of `fields` is a field name or an object with exactly one
+  function (or `field`) and an optional `alias`. Without `fields` all fields
+  are selected. Labels without alias are generated (`lower_name`).
+* Arguments are typed expressions: field names (strings are always field
+  names), `{"field": ...}`, JSON numbers / booleans, `{"value": ...}` for
+  other literals (e.g. strings) or nested functions. `{"lower": "amount"}`
+  is rejected for an `int` field, `{"length": "name"}` is an `int`
+  expression.
+* Single arguments are passed directly (`{"lower": "name"}`), multiple ones
+  as list (`{"substring": ["name", 1, 3]}`).
+* Default functions:
+  * string: `lower`, `upper`, `trim`, `length`, `concat`, `substring`,
+    `replace`
+  * numeric: `abs`, `round`, `ceil`, `floor`, `add`, `sub`, `mul`, `div`
+  * date / time: `date`, `year`, `month`, `day`, `hour`, `minute`
+  * generic: `coalesce`, `nullif`, `cast` (`{"cast": ["amount", "string"]}`)
+  * aggregate: `count` (incl. `{"count": "*"}`), `count_distinct`, `sum`,
+    `avg`, `min`, `max`
+* Aggregates are validated: fields outside of aggregate functions must be
+  part of `group_by`, aggregates must not be nested.
+
+Functions are provided by generators `(annotation) -> Iterable[
+SqlExpressionFunction]` which are called for every known type:
+
+```python
+from sqlalchemy import Integer, func
+from querymodelling.sql_filter import without
+from querymodelling.sql_query import (
+    Expr, SqlExpressionFunction, default_sql_expression_mapping
+)
+
+def instr(annotation):
+    if annotation is str:
+        yield SqlExpressionFunction(
+            "instr", int, (Expr(str), Expr(str)),
+            lambda value, search: func.instr(value, search, type_=Integer()))
+
+mapping = default_sql_expression_mapping()
+mapping.function_generators = [
+    without(generator, "cast") for generator in mapping.function_generators
+]
+mapping.add_functions(instr)
+
+ExampleQuery = SqlQueryModel(ExampleModel, mapping=mapping)
+```
+
+Referenceable fields are provided by reference generators
+(`reference_generators=...`, e.g. virtual fields based on SQL expressions).

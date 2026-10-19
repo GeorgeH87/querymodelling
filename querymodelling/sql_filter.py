@@ -139,6 +139,19 @@ def resolve_column(source: Any, name: str) -> Any:
             f"cannot resolve column {name!r} on {source!r}") from error
 
 
+def resolve_expression(column: Any, source: Any) -> Any:
+    """Resolves a column definition: an attribute name on the source, a
+    callable receiving the source or a column expression."""
+    if isinstance(column, str):
+        return resolve_column(source, column)
+    if hasattr(column, "__clause_element__") or isinstance(
+            column, ColumnElement):
+        return column
+    if callable(column):
+        return column(source)
+    return column
+
+
 @dataclass(frozen=True)
 class SqlOperator:
     """Compares a column with a typed value, e.g. ``contains`` -> LIKE."""
@@ -205,14 +218,7 @@ class SqlFilterField:
     json_schema_extra: Optional[dict] = None
 
     def resolve(self, source: Any) -> Any:
-        if isinstance(self.column, str):
-            return resolve_column(source, self.column)
-        if hasattr(self.column, "__clause_element__") or isinstance(
-                self.column, ColumnElement):
-            return self.column
-        if callable(self.column):
-            return self.column(source)
-        return self.column
+        return resolve_expression(self.column, source)
 
     def conditions(self, source: Any, value: SqlFieldFilter):
         yield from value._sql_conditions(self.resolve(source))
