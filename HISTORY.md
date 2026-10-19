@@ -1,7 +1,7 @@
 Release History
 ===============
 
-Unreleased
+0.0.13
 ----------
 
 -   sql_filter: add typed, nested and generator based SQL filter models
