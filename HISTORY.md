@@ -1,6 +1,13 @@
 Release History
 ===============
 
+Unreleased
+----------
+
+-   sql_filter: add typed, nested and generator based SQL filter models
+    (``SqlFilterModel``) with ``and`` / ``or`` / ``not``, typed operators,
+    SQL functions and JSON schema support
+
 0.0.12 (2025-10-27)
 
 -   sql: add support for filtering boolean fields

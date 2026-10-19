@@ -36,7 +36,7 @@ jobs:
         cache: 'pip'
     - name: Install dependencies
       run: |
-        pip install unittest-xml-reporting
+        pip install unittest-xml-reporting pydantic sqlmodel
     - name: Run tests
       run: |
         python tests
