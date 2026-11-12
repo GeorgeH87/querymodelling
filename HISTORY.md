@@ -10,6 +10,11 @@ Release History
 -   sql_query: add typed, generator based SQL query models
     (``SqlQueryModel``) with ``fields`` (field names, SQL functions,
     aliases), ``where`` and ``group_by`` incl. typed result models
+-   sql_query: ``group_by`` accepts aliases of ``fields`` and an empty
+    list (no grouping)
+-   sql_query: joins, subqueries (``exists``, ``in``, scalar) and conditions
+    as typed expressions (``{"eq": [a, b]}``), fields are referenced by
+    ``{"model", "field"}``, plain JSON values are constants
 
 0.0.12 (2025-10-27)
 

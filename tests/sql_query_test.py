@@ -1,43 +1,103 @@
 import unittest
-from datetime import date, datetime, timezone
-from decimal import Decimal
+from datetime import datetime, timezone
+from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, ValidationError
+from pydantic import ValidationError
 from sqlalchemy import Integer, func
 from sqlmodel import Field, Session, SQLModel, create_engine
 
 from querymodelling.sql_filter import only, without
 from querymodelling.sql_query import (
     Expr, SqlExpressionFunction, SqlFieldReference, SqlQuery, SqlQueryModel,
-    CAST_TYPES, default_sql_expression_mapping, model_references
+    default_sql_expression_mapping, model_references
 )
 
 
 UTC = timezone.utc
 
 
-class QueryExample(SQLModel, table=True):
+class Genre(str, Enum):
+    novel = "novel"
+    poem = "poem"
+
+
+class QueryAuthor(SQLModel, table=True):
+    __tablename__ = "author"
+
     id: Optional[int] = Field(default=None, primary_key=True)
     name: str
-    description: Optional[str] = None
-    amount: int = 0
+
+
+class QueryBook(SQLModel, table=True):
+    __tablename__ = "book"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    title: str
+    genre: Genre = Genre.novel
     price: float = 0
-    created: Optional[datetime] = None
+    author_id: Optional[int] = Field(default=None, foreign_key="author.id")
+    reviewer_id: Optional[int] = Field(
+        default=None, foreign_key="author.id")
+    published: Optional[datetime] = None
 
 
-ROWS = [
-    dict(id=1, name="bumpwurst", description="a test", amount=5, price=1.5,
-         created=datetime(2024, 1, 5, 10, tzinfo=UTC)),
-    dict(id=2, name="Bratwurst", description=None, amount=10, price=2.5,
-         created=datetime(2024, 6, 1, 12, tzinfo=UTC)),
-    dict(id=3, name="bump", description="x", amount=-20, price=0.0,
-         created=None),
-    dict(id=4, name="Bratwurst", description="Test", amount=3, price=4.0,
-         created=datetime(2025, 3, 3, 8, tzinfo=UTC)),
+class QueryReview(SQLModel, table=True):
+    __tablename__ = "review"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    book_id: int = Field(foreign_key="book.id")
+    rating: int
+
+
+AUTHORS = [
+    dict(id=1, name="Michael Ende"),
+    dict(id=2, name="Astrid"),
+    dict(id=3, name="Max"),
+]
+BOOKS = [
+    dict(id=1, title="Momo", author_id=1, reviewer_id=2, price=10.0,
+         published=datetime(2020, 1, 1, tzinfo=UTC)),
+    dict(id=123, title="Jim Knopf", author_id=1, reviewer_id=3, price=12.5),
+    dict(id=200, title="Pippi", author_id=2, price=8.0, genre=Genre.poem),
+    dict(id=300, title="Anonym", price=5.0),
+]
+REVIEWS = [
+    dict(id=1, book_id=1, rating=5),
+    dict(id=2, book_id=1, rating=3),
+    dict(id=3, book_id=123, rating=4),
+    dict(id=4, book_id=200, rating=2),
 ]
 
-ExampleQuery = SqlQueryModel(QueryExample)
+BookQuery = SqlQueryModel(
+    QueryBook, models=[QueryAuthor, QueryReview], model_name="BookSqlQuery")
+
+
+def book(field: str) -> dict:
+    return {"model": "book", "field": field}
+
+
+def author(field: str, instance: Optional[str] = None) -> dict:
+    return {"model": "author", "field": field} | (
+        {"as": instance} if instance else {})
+
+
+def review(field: str) -> dict:
+    return {"model": "review", "field": field}
+
+
+def nested_exists(depth: int) -> dict:
+    query = {"model": "book"}
+    for _ in range(depth - 1):
+        query = {"model": "book", "where": {"exists": query}}
+    return {"exists": query}
+
+
+AUTHOR_JOIN = {
+    "model": "author",
+    "type": "left",
+    "on": {"eq": [book("author_id"), author("id")]},
+}
 
 
 class SqlQueryTest(unittest.TestCase):
@@ -47,482 +107,498 @@ class SqlQueryTest(unittest.TestCase):
         cls.engine = create_engine("sqlite://")
         SQLModel.metadata.create_all(cls.engine)
         with Session(cls.engine) as session:
-            session.add_all(QueryExample(**row) for row in ROWS)
+            session.add_all(QueryAuthor(**row) for row in AUTHORS)
+            session.add_all(QueryBook(**row) for row in BOOKS)
+            session.add_all(QueryReview(**row) for row in REVIEWS)
             session.commit()
 
     @classmethod
     def tearDownClass(cls):
         cls.engine.dispose()
 
-    def fetch(self, data: dict, model: type[SqlQuery] = ExampleQuery):
+    def fetch(self, data: dict, model: type[SqlQuery] = BookQuery):
         query = model.model_validate(data)
         with Session(self.engine) as session:
             return [
                 row.model_dump(by_alias=True) for row in query.fetch(session)
             ]
 
-    def test_fields_with_alias(self):
-        rows = self.fetch({
+    def sql(self, data: dict, model: type[SqlQuery] = BookQuery) -> str:
+        statement = model.model_validate(data).to_select()
+        return " ".join(str(statement).split())
+
+    def test_example_with_join(self):
+        data = {
+            "joins": [AUTHOR_JOIN],
             "fields": [
-                "name",
-                {"field": "id", "alias": "my_id"},
-                {"lower": "name", "alias": "lowered"},
+                book("id"),
+                {"model": "author", "field": "id", "alias": "author_id"},
+                {"lower": author("name"), "alias": "author_name"},
             ],
-            "where": {"id": {"lte": 2}},
-        })
-        self.assertEqual(rows, [
-            {"name": "bumpwurst", "my_id": 1, "lowered": "bumpwurst"},
-            {"name": "Bratwurst", "my_id": 2, "lowered": "bratwurst"},
+            "where": {"and": [
+                {"eq": [book("id"), 123]},
+                {"startswith": [author("name"), "M"]},
+            ]},
+        }
+        self.assertEqual(
+            self.sql(data),
+            "SELECT book.id AS id, author.id AS author_id, "
+            "lower(author.name) AS author_name FROM book LEFT OUTER JOIN "
+            "author ON book.author_id = author.id WHERE book.id = :param_1 "
+            "AND (author.name LIKE :name_1 || '%' ESCAPE '/')",
+        )
+        self.assertEqual(self.fetch(data), [
+            {"id": 123, "author_id": 1, "author_name": "michael ende"}])
+
+    def test_default_fields_and_model(self):
+        self.assertEqual(
+            self.fetch({"where": {"eq": [book("id"), 300]}}),
+            [{"id": 300, "title": "Anonym", "genre": Genre.novel,
+              "price": 5.0, "author_id": None, "reviewer_id": None,
+              "published": None}],
+        )
+        self.assertEqual(self.fetch({
+            "model": "author",
+            "where": {"icontains": [author("name"), "M"]},
+        }), [{"id": 1, "name": "Michael Ende"}, {"id": 3, "name": "Max"}])
+
+    def test_constants(self):
+        self.assertEqual(self.fetch({
+            "fields": ["text", 1, 1.5, True, {"upper": "abc"}],
+            "where": {"eq": [book("id"), 1]},
+        }), [{"column": "text", "column_2": 1, "column_3": 1.5,
+              "column_4": True, "upper": "ABC"}])
+
+    def test_self_join_with_as(self):
+        self.assertEqual(self.fetch({
+            "joins": [
+                AUTHOR_JOIN,
+                {
+                    "model": "author",
+                    "as": "reviewer",
+                    "type": "left",
+                    "on": {"eq": [
+                        book("reviewer_id"), author("id", "reviewer")]},
+                },
+            ],
+            "fields": [book("title"), author("name"),
+                       author("name", "reviewer")],
+            "where": {"in": [book("id"), [1, 200]]},
+        }), [
+            {"title": "Momo", "author_name": "Michael Ende",
+             "reviewer_name": "Astrid"},
+            {"title": "Pippi", "author_name": "Astrid",
+             "reviewer_name": None},
         ])
 
-    def test_default_fields(self):
-        query = ExampleQuery.model_validate({"where": {"id": {"eq": 3}}})
-        self.assertEqual(
-            query.labels(),
-            ["id", "name", "description", "amount", "price", "created"],
-        )
-        self.assertEqual(self.fetch({"where": {"id": {"eq": 3}}}), [{
-            "id": 3, "name": "bump", "description": "x", "amount": -20,
-            "price": 0.0, "created": None,
-        }])
+    def test_join_types(self):
+        inner = {**AUTHOR_JOIN, "type": "inner"}
+        self.assertEqual(len(self.fetch(
+            {"joins": [inner], "fields": [book("id")]})), 3)
+        self.assertEqual(len(self.fetch(
+            {"joins": [AUTHOR_JOIN], "fields": [book("id")]})), 4)
+        self.assertNotIn("OUTER", self.sql({
+            "joins": [{"model": "author",
+                       "on": {"eq": [book("author_id"), author("id")]}}],
+        }))
+        full = {**AUTHOR_JOIN, "type": "full"}
+        self.assertIn("FULL OUTER JOIN", self.sql({"joins": [full]}))
 
-    def test_aggregates_with_group_by(self):
-        rows = self.fetch({
-            "fields": [
-                "name",
-                {"count": "id", "alias": "count_id"},
-                {"count": "*"},
-                {"count": "description"},
-                {"sum": "amount"},
-                {"avg": "amount"},
-                {"min": "price"},
-                {"max": {"lower": "name"}},
-            ],
-            "where": {"name": {"contains": "wurst"}},
-            "group_by": ["name"],
-        })
-        self.assertEqual(sorted(rows, key=lambda r: r["name"]), [
-            {"name": "Bratwurst", "count_id": 2, "count": 2,
-             "count_description": 1, "sum_amount": 13, "avg_amount": 6.5,
-             "min_price": 2.5, "max_lower_name": "bratwurst"},
-            {"name": "bumpwurst", "count_id": 1, "count": 1,
-             "count_description": 1, "sum_amount": 5, "avg_amount": 5.0,
-             "min_price": 1.5, "max_lower_name": "bumpwurst"},
-        ])
-
-    def test_aggregates_without_group_by(self):
-        self.assertEqual(self.fetch({"fields": [
-            {"count": "*", "alias": "total"},
-            {"count_distinct": "name"},
-            {"sum": {"mul": ["amount", 2]}},
-        ]}), [{"total": 4, "count_distinct_name": 3, "sum_mul_amount": -4}])
-
-    def test_group_by_expression(self):
-        rows = self.fetch({
-            "fields": [
-                {"lower": "name", "alias": "key"},
-                {"count": "*", "alias": "total"},
-            ],
-            "group_by": [{"lower": "name"}],
-        })
-        self.assertEqual(
-            sorted((r["key"], r["total"]) for r in rows),
-            [("bratwurst", 2), ("bump", 1), ("bumpwurst", 1)],
-        )
-
-    def test_string_functions(self):
-        self.assertEqual(self.fetch({
-            "fields": [
-                {"upper": "name"},
-                {"length": {"trim": "name"}},
-                {"concat": ["name", {"value": " - "},
-                            {"coalesce": ["description", {"value": "?"}]}]},
-                {"substring": ["name", 2, 3]},
-                {"substring": ["name", 3]},
-                {"replace": ["name", {"value": "wurst"}, {"value": "!"}]},
-            ],
-            "where": {"id": {"eq": 2}},
-        }), [{
-            "upper_name": "BRATWURST",
-            "length_trim_name": 9,
-            "concat_name_coalesce_description": "Bratwurst - ?",
-            "substring_name": "rat",
-            "substring_name_2": "atwurst",
-            "replace_name": "Brat!",
-        }])
-
-    def test_numeric_functions(self):
-        self.assertEqual(self.fetch({
-            "fields": [
-                {"abs": "amount"},
-                {"add": ["amount", 1]},
-                {"sub": ["price", 0.5]},
-                {"mul": ["amount", "amount"]},
-                {"div": ["amount", 4]},
-                {"round": [{"div": ["amount", 3]}, 2]},
-                {"round": "price", "alias": "rounded"},
-                {"ceil": "price"},
-                {"floor": "price"},
-            ],
-            "where": {"id": {"eq": 3}},
-        }), [{
-            "abs_amount": 20, "add_amount": -19, "sub_price": -0.5,
-            "mul_amount_amount": 400, "div_amount": -5.0,
-            "round_div_amount": -6.67, "rounded": 0.0, "ceil_price": 0.0,
-            "floor_price": 0.0,
-        }])
-
-    def test_temporal_generic_and_cast_functions(self):
-        self.assertEqual(self.fetch({
-            "fields": [
-                {"date": "created"},
-                {"year": "created"},
-                {"month": {"date": "created"}},
-                {"day": "created"},
-                {"hour": "created"},
-                {"minute": "created"},
-                {"nullif": ["amount", 5]},
-                {"cast": ["amount", "string"]},
-                {"cast": ["price", "integer"], "alias": "price_int"},
-            ],
-            "where": {"id": {"eq": 1}},
-        }), [{
-            "date_created": date(2024, 1, 5), "year_created": 2024,
-            "month_date_created": 1, "day_created": 5, "hour_created": 10,
-            "minute_created": 0, "nullif_amount": None,
-            "cast_amount": "5", "price_int": 1,
-        }])
-
-    def test_typed_result_model(self):
-        def annotations(data):
-            model = ExampleQuery.model_validate(data).result_model()
+    def test_result_types_of_outer_joins(self):
+        def annotations(join_type):
+            query = BookQuery.model_validate({
+                "joins": [{**AUTHOR_JOIN, "type": join_type}],
+                "fields": [book("title"), author("name"), {"count": "*"}],
+                "group_by": [book("title"), author("name")],
+            })
             return {
                 name: field.annotation
-                for name, field in model.model_fields.items()
+                for name, field in query.result_model().model_fields.items()
             }
 
-        query = ExampleQuery.model_validate({"fields": [
-            "id", "name", {"add": ["amount", 1]}, {"add": ["price", 1]},
-            {"cast": ["amount", "decimal"]}, {"year": "created"},
-            {"date": "created"},
-        ]})
-        self.assertEqual(annotations(query.model_dump(by_alias=True)), {
-            "id": Optional[int],
-            "name": str,
-            "add_amount": Optional[int],
-            "add_price": Optional[float],
-            "cast_amount": Optional[Decimal],
-            "year_created": Optional[int],
-            "date_created": Optional[date],
-        })
-        self.assertEqual(annotations({"fields": [
-            {"avg": "amount"}, {"sum": "price"}, {"count": "*"},
-            {"max": "created"},
-        ]}), {
-            "avg_amount": Optional[float],
-            "sum_price": Optional[float],
-            "count": int,
-            "max_created": Optional[datetime],
-        })
-        self.assertIs(
-            query.result_model(),
-            ExampleQuery.model_validate(query.model_dump(
-                by_alias=True, exclude_none=True)).result_model(),
-        )
+        self.assertEqual(annotations("inner"), {
+            "title": str, "author_name": str, "count": int})
+        self.assertEqual(annotations("left"), {
+            "title": str, "author_name": Optional[str], "count": int})
+        self.assertEqual(annotations("full"), {
+            "title": Optional[str], "author_name": Optional[str],
+            "count": int})
 
-    def test_auto_labels_are_unique(self):
-        query = ExampleQuery.model_validate({"fields": [
-            "name", {"field": "name", "alias": "name_2"}, {"field": "name"},
-            {"lower": "name"}, {"lower": "name"},
-        ]})
+    def test_exists_subquery(self):
+        rows = self.fetch({
+            "fields": [book("title")],
+            "where": {"exists": {
+                "model": "review",
+                "where": {"and": [
+                    {"eq": [review("book_id"), book("id")]},
+                    {"gte": [review("rating"), 4]},
+                ]},
+            }},
+        })
+        self.assertEqual(rows, [{"title": "Momo"}, {"title": "Jim Knopf"}])
+
+    def test_in_subquery(self):
+        data = {
+            "fields": [book("title")],
+            "where": {"in": [book("author_id"), {
+                "model": "author",
+                "fields": [author("id")],
+                "where": {"startswith": [author("name"), "M"]},
+            }]},
+        }
+        self.assertIn(
+            "book.author_id IN (SELECT author.id AS id FROM author",
+            self.sql(data),
+        )
         self.assertEqual(
-            query.labels(),
-            ["name", "name_2", "name_3", "lower_name", "lower_name_2"],
-        )
+            self.fetch(data), [{"title": "Momo"}, {"title": "Jim Knopf"}])
 
-    def test_sql(self):
-        query = ExampleQuery.model_validate({
-            "fields": [{"count": "id", "alias": "count_id"}, "name"],
-            "where": {"name": {"startswith": "b"}},
-            "group_by": ["name"],
-        })
+    def test_scalar_subquery(self):
+        data = {
+            "fields": [book("title"), {
+                "model": "review",
+                "fields": [{"avg": review("rating")}],
+                "where": {"eq": [review("book_id"), book("id")]},
+                "alias": "avg_rating",
+            }],
+            "where": {"gt": [{
+                "model": "review",
+                "fields": [{"count": "*"}],
+                "where": {"eq": [review("book_id"), book("id")]},
+            }, 0]},
+        }
+        self.assertEqual(self.fetch(data), [
+            {"title": "Momo", "avg_rating": 4.0},
+            {"title": "Jim Knopf", "avg_rating": 4.0},
+            {"title": "Pippi", "avg_rating": 2.0},
+        ])
         self.assertEqual(
-            " ".join(str(query.to_select()).split()),
-            "SELECT count(queryexample.id) AS count_id, queryexample.name "
-            "AS name FROM queryexample WHERE (queryexample.name LIKE "
-            ":name_1 || '%' ESCAPE '/') GROUP BY queryexample.name",
+            BookQuery.model_validate(data).result_model().model_fields[
+                "avg_rating"].annotation,
+            Optional[float],
         )
 
-    def test_count_without_columns_selects_from_source(self):
-        query = ExampleQuery.model_validate({"fields": [{"count": "*"}]})
-        self.assertIn("FROM queryexample", str(query.to_select()))
+    def test_correlated_subquery_on_same_model(self):
+        self.assertEqual(self.fetch({
+            "fields": [book("title")],
+            "where": {"exists": {
+                "model": "book",
+                "as": "other",
+                "where": {"and": [
+                    {"eq": [{"model": "book", "as": "other",
+                             "field": "author_id"}, book("author_id")]},
+                    {"ne": [{"model": "book", "as": "other", "field": "id"},
+                            book("id")]},
+                ]},
+            }},
+        }), [{"title": "Momo"}, {"title": "Jim Knopf"}])
+
+    def test_inner_scope_shadows_outer(self):
+        statement = self.sql({
+            "fields": [book("id")],
+            "where": {"exists": {
+                "model": "book",
+                "where": {"eq": [book("id"), 1]},
+            }},
+        })
+        self.assertIn("EXISTS (SELECT 1 FROM book WHERE book.id", statement)
+
+    def test_group_by_with_ref(self):
+        rows = self.fetch({
+            "joins": [AUTHOR_JOIN],
+            "fields": [
+                {"lower": author("name"), "alias": "author_name"},
+                {"count": "*", "alias": "books"},
+                {"sum": book("price"), "alias": "total"},
+            ],
+            "group_by": [{"ref": "author_name"}],
+        })
+        self.assertEqual(rows, [
+            {"author_name": None, "books": 1, "total": 5.0},
+            {"author_name": "astrid", "books": 1, "total": 8.0},
+            {"author_name": "michael ende", "books": 2, "total": 22.5},
+        ])
+
+    def test_empty_group_by_means_no_grouping(self):
+        data = {"fields": [{"count": book("author_id")}], "group_by": []}
+        self.assertEqual(self.fetch(data), [{"count_author_id": 3}])
+        self.assertNotIn("GROUP BY", self.sql(data))
+
+    def test_conditions(self):
+        def ids(where):
+            return [
+                row["id"] for row in
+                self.fetch({"fields": [book("id")], "where": where})
+            ]
+
+        self.assertEqual(ids({"eq": [book("genre"), "poem"]}), [200])
+        self.assertEqual(ids({"ne": [book("genre"), "poem"]}), [1, 123, 300])
+        self.assertEqual(ids({"in": [book("id"), [1, 300, 999]]}), [1, 300])
+        self.assertEqual(ids({"not_in": [book("id"), [1, 300]]}), [123, 200])
+        self.assertEqual(ids({"between": [book("price"), 8, 10]}), [1, 200])
+        self.assertEqual(ids({"lt": [book("price"), 8]}), [300])
+        self.assertEqual(ids({"is_null": book("author_id")}), [300])
+        self.assertEqual(
+            ids({"is_not_null": book("reviewer_id")}), [1, 123])
+        self.assertEqual(
+            ids({"gte": [book("published"), "2019-12-31T00:00:00Z"]}), [1])
+        self.assertEqual(ids({"contains": [book("title"), "%"]}), [])
+        self.assertEqual(ids({"like": [book("title"), "%i%"]}), [123, 200])
+        self.assertEqual(ids({"or": [
+            {"endswith": [book("title"), "mo"]},
+            {"not": {"gt": [book("price"), 5]}},
+        ]}), [1, 300])
+        self.assertEqual(
+            ids({"eq": [{"length": book("title")}, 4]}), [1])
+        self.assertEqual(ids(True), [1, 123, 200, 300])
+
+    def test_functions(self):
+        self.assertEqual(self.fetch({
+            "fields": [
+                {"concat": [book("title"), " (", {"cast": [
+                    book("price"), "string"]}, ")"], "alias": "label"},
+                {"round": [{"div": [book("price"), 3]}, 2]},
+                {"add": [book("id"), 1]},
+                {"year": book("published")},
+                {"coalesce": [book("author_id"), 0]},
+            ],
+            "where": {"eq": [book("id"), 1]},
+        }), [{"label": "Momo (10.0)", "round_div_price": 3.33,
+              "add_id": 2, "year_published": 2020,
+              "coalesce_author_id": 1}])
 
     def test_validation(self):
         invalid = {
-            "type mismatch": {"fields": [{"lower": "amount"}]},
-            "unknown field": {"fields": ["unknown"]},
-            "unknown function": {"fields": [{"unknown": "name"}]},
-            "two functions": {"fields": [{"lower": "name", "upper": "name"}]},
-            "too few arguments": {"fields": [{"concat": ["name"]}]},
-            "too many arguments": {"fields": [{"lower": ["name", "name"]}]},
-            "string literal without value": {
-                "fields": [{"concat": ["name", " "]}]},
-            "wrong literal": {"fields": [{"add": ["amount", True]}]},
-            "wrong value": {"fields": [{"year": {"value": "x"}}]},
-            "invalid cast": {"fields": [{"cast": ["amount", "blob"]}]},
-            "literal as field": {"fields": [5]},
-            "empty fields": {"fields": []},
-            "invalid alias": {"fields": [{"field": "id", "alias": "1a"}]},
-            "nested alias": {
-                "fields": [{"lower": {"upper": "name", "alias": "x"}}]},
-            "duplicate alias": {"fields": [
-                {"field": "id", "alias": "a"},
-                {"field": "name", "alias": "a"},
+            "constant of wrong type": {"where": {"eq": [book("id"), "x"]}},
+            "function of wrong type": {"fields": [{"lower": book("price")}]},
+            "unknown field": {"fields": [book("name")]},
+            "unknown model": {"fields": [{"model": "user", "field": "id"}]},
+            "model not joined": {"fields": [author("name")]},
+            "join refers to later join": {"joins": [
+                {"model": "author",
+                 "on": {"eq": [book("reviewer_id"),
+                               author("id", "reviewer")]}},
+                {"model": "author", "as": "reviewer",
+                 "on": {"eq": [book("id"), book("id")]}},
             ]},
-            "not grouped": {"fields": ["name", {"count": "id"}]},
-            "not grouped expression": {
-                "fields": [{"upper": "name"}],
-                "group_by": [{"lower": "name"}],
-            },
-            "nested aggregate": {"fields": [{"sum": {"count": "id"}}]},
+            "model joined twice": {"joins": [AUTHOR_JOIN, AUTHOR_JOIN]},
+            "as of other model": {"joins": [{
+                "model": "author", "as": "other",
+                "on": {"eq": [book("author_id"),
+                              {"model": "book", "as": "other",
+                               "field": "id"}]},
+            }]},
+            "invalid join type": {"joins": [{**AUTHOR_JOIN, "type": "outer"}]},
+            "too many joins": {"joins": [
+                {**AUTHOR_JOIN, "as": f"a{index}"} for index in range(6)]},
+            "where is no condition": {"where": book("title")},
+            "aggregate in where": {"where": {"gt": [{"count": "*"}, 1]}},
+            "aggregate in on": {"joins": [{
+                **AUTHOR_JOIN, "on": {"gt": [{"count": "*"}, 1]}}]},
+            "two functions": {"where": {"eq": [1, 1], "ne": [1, 2]}},
+            "scalar subquery with two fields": {"fields": [{
+                "model": "review", "fields": [review("id"), review("rating")],
+            }]},
+            "scalar subquery without fields": {
+                "where": {"gt": [{"model": "review"}, 1]}},
+            "unknown ref": {"fields": [book("title")],
+                            "group_by": [{"ref": "x"}]},
+            "constant in group_by": {"fields": [book("title")],
+                                     "group_by": ["title"]},
+            "ref outside of group_by": {"fields": [{"ref": "x"}]},
+            "not grouped": {"fields": [book("title"), {"count": "*"}]},
+            "nested aggregate": {"fields": [{"sum": {"count": "*"}}]},
             "aggregate in group_by": {
-                "fields": ["name"], "group_by": [{"count": "id"}]},
-            "alias in group_by": {
-                "fields": ["name"],
-                "group_by": [{"field": "name", "alias": "x"}]},
-            "unknown key": {"fields": ["name"], "order": "name"},
+                "fields": [{"count": "*", "alias": "c"}],
+                "group_by": [{"ref": "c"}]},
+            "alias in where": {"where": {"eq": [
+                {**book("id"), "alias": "x"}, 1]}},
+            "nested alias": {"fields": [
+                {"lower": {**book("title"), "alias": "x"}}]},
+            "duplicate alias": {"fields": [
+                {**book("id"), "alias": "a"},
+                {**book("title"), "alias": "a"},
+            ]},
+            "invalid alias": {"fields": [{**book("id"), "alias": "1a"}]},
+            "unknown key": {"order_by": []},
+            "subquery too deep": {"where": nested_exists(4)},
         }
         for case, data in invalid.items():
             with self.subTest(case):
-                with self.assertRaises(ValidationError) as context:
-                    ExampleQuery.model_validate(data)
-                # one error per matching overload at most
-                self.assertLessEqual(
-                    context.exception.error_count(), len(CAST_TYPES))
+                with self.assertRaises(ValidationError):
+                    BookQuery.model_validate(data)
 
-    def test_valid_grouping(self):
-        ExampleQuery.model_validate({
-            "fields": [
-                "name",
-                {"add": [{"length": "name"}, {"count": "*"}]},
-                {"upper": {"lower": "name"}},
-            ],
-            "group_by": ["name", {"lower": "name"}],
-        })
-        ExampleQuery.model_validate(
-            {"fields": [{"field": "name"}], "group_by": ["name"]})
+    def test_subquery_depth(self):
+        BookQuery.model_validate({"where": nested_exists(3)})
+        with self.assertRaises(ValidationError) as context:
+            BookQuery.model_validate({"where": nested_exists(4)})
+        self.assertIn("deeper than 3 levels", str(context.exception))
 
-    def test_ambiguous_numeric_expressions_are_resolved_narrow_first(self):
-        query = ExampleQuery.model_validate({"fields": [
-            {"add": ["amount", 1]},
-            {"add": ["price", 1]},
-            {"add": ["amount", "price"]},
-        ]})
-        self.assertEqual(
-            [type(f).__sql_function__.result_type for f in query.fields],
-            [int, float, float],
-        )
+    def test_error_messages(self):
+        with self.assertRaises(ValidationError) as context:
+            BookQuery.model_validate({"fields": [author("name")]})
+        self.assertIn("model 'author' is not part of the query",
+                      str(context.exception))
+        with self.assertRaises(ValidationError) as context:
+            BookQuery.model_validate({"fields": [book("name")]})
+        self.assertEqual(context.exception.error_count(), 1)
+        with self.assertRaises(ValidationError) as context:
+            BookQuery.model_validate(
+                {"fields": [book("title"), {"count": "*"}]})
+        self.assertIn("field book.title must be part of group_by",
+                      str(context.exception))
 
     def test_json_schema(self):
-        schema = ExampleQuery.model_json_schema()
+        schema = BookQuery.model_json_schema()
         definitions = schema["$defs"]
         self.assertEqual(
-            set(schema["properties"]), {"fields", "where", "group_by"})
+            set(schema["properties"]),
+            {"model", "as", "joins", "fields", "where", "group_by"},
+        )
         self.assertFalse(schema["additionalProperties"])
+        join = definitions["BookSqlQueryJoin"]
+        self.assertEqual(join["required"], ["model", "on"])
         self.assertEqual(
-            schema["properties"]["fields"]["anyOf"][0]["items"],
-            {"$ref": "#/$defs/QueryExampleSqlQueryColumn"},
+            join["properties"]["type"]["enum"], ["inner", "left", "full"])
+        self.assertEqual(
+            join["properties"]["model"]["enum"], ["book", "author", "review"])
+
+        field = definitions["BookSqlQueryBookIntField"]
+        self.assertEqual(field["properties"]["field"]["enum"], [
+            "id", "author_id", "reviewer_id"])
+        self.assertEqual(field["properties"]["model"]["const"], "book")
+        self.assertFalse(field["additionalProperties"])
+
+        integer = definitions["BookSqlQueryIntExpression"]["oneOf"]
+        self.assertEqual(integer[0], {"type": "integer"})
+        self.assertEqual(integer[1]["discriminator"]["propertyName"], "model")
+
+        subquery = definitions["BookSqlQueryIntQuery"]
+        self.assertEqual(subquery["required"], ["model", "fields"])
+        self.assertEqual(subquery["properties"]["fields"]["maxItems"], 1)
+        exists = definitions["BookSqlQueryExistsQuery"]
+        self.assertEqual(exists["required"], ["model"])
+
+        lower = definitions["BookSqlQueryLowerStrFunction"]
+        self.assertEqual(
+            lower["properties"]["lower"]["$ref"],
+            "#/$defs/BookSqlQueryStrExpression",
         )
-        self.assertEqual(
-            schema["properties"]["where"]["anyOf"][0],
-            {"$ref": "#/$defs/QueryExampleSqlQueryWhere"},
-        )
-        column = definitions["QueryExampleSqlQueryColumn"]["oneOf"]
-        self.assertEqual(column[0]["enum"], [
-            "id", "name", "description", "amount", "price", "created"])
-        self.assertEqual(
-            column[1], {"$ref": "#/$defs/QueryExampleSqlQueryFieldReference"})
-
-        lower = definitions["QueryExampleSqlQueryLowerStrFunction"]
-        self.assertEqual(lower["required"], ["lower"])
-        self.assertFalse(lower["additionalProperties"])
-        self.assertEqual(
-            lower["properties"]["lower"],
-            {"$ref": "#/$defs/QueryExampleSqlQueryStrExpression",
-             "description": "SQL LOWER()"},
-        )
-        self.assertIn("alias", lower["properties"])
-
-        string = definitions["QueryExampleSqlQueryStrExpression"]["oneOf"]
-        self.assertEqual(string[0]["enum"], ["name", "description"])
-
-        concat = definitions["QueryExampleSqlQueryConcatStrFunction"]
-        self.assertEqual(concat["properties"]["concat"]["minItems"], 2)
-
-        count = definitions["QueryExampleSqlQueryCountIntFunction"]
-        self.assertIn({"const": "*", "type": "string"},
-                      count["properties"]["count"]["anyOf"])
-
-        cast = definitions["QueryExampleSqlQueryCastStrFunction"]
-        self.assertEqual(
-            cast["properties"]["cast"]["prefixItems"][1],
-            {"const": "string", "type": "string"},
-        )
+        self.assertIn("BookSqlQueryEqIntFunction", definitions)
+        self.assertIn("BookSqlQueryEqGenreFunction", definitions)
+        group_by = definitions["BookSqlQueryGroupBy"]["oneOf"]
+        self.assertNotIn({"type": "string"}, group_by)
+        self.assertIn({"$ref": "#/$defs/SqlAliasReference"}, group_by)
 
     def test_python_construction(self):
-        query = ExampleQuery(fields=["name"], group_by=["name"])
-        self.assertEqual(query.labels(), ["name"])
-        query = ExampleQuery.model_validate(ExampleQuery.model_validate(
-            {"fields": [{"count": "*", "alias": "c"}, "name"],
-             "group_by": ["name"]}).model_dump(by_alias=True))
-        self.assertEqual(query.labels(), ["c", "name"])
-
-    def test_include_exclude_alias_and_source(self):
-        class Aliased(BaseModel):
-            name: str = Field(alias="title")
-            amount: int
-            data: dict
-
-        model = SqlQueryModel(
-            Aliased,
-            exclude_fields=["amount"],
-            source={
-                "name": QueryExample.name,
-                "data": QueryExample.description,
-            },
-        )
-        self.assertEqual(
-            list(model.__sql_query_references__), ["title", "data"])
-        query = model.model_validate({
-            "fields": ["title", {"lower": "title"}],
-            "where": {"title": {"eq": "bump"}},
+        query = BookQuery.model_validate({
+            "fields": [{"lower": book("title"), "alias": "t"}],
+            "where": {"exists": {"model": "review"}},
         })
-        with Session(self.engine) as session:
-            rows = query.fetch(session)
-        self.assertEqual(
-            [row.model_dump(by_alias=True) for row in rows],
-            [{"title": "bump", "lower_title": "bump"}],
-        )
-        self.assertIsNone(model.__sql_query_references__["data"].annotation)
-        model.model_validate({"fields": ["data", {"count": "data"}],
-                              "group_by": ["data"]})
-        with self.assertRaises(ValidationError):
-            model.model_validate({"fields": [{"lower": "data"}]})
+        copy = BookQuery.model_validate(
+            query.model_dump(by_alias=True, exclude_none=True))
+        self.assertEqual(copy.labels(), ["t"])
+        self.assertEqual(str(copy.to_select()), str(query.to_select()))
 
-    def test_source_override(self):
-        alias = QueryExample.__table__.alias("other")
-        query = ExampleQuery.model_validate({
-            "fields": [{"upper": "name"}], "where": {"id": {"eq": 1}}})
-        statement = str(query.to_select(alias))
-        self.assertIn("upper(other.name)", statement)
-        self.assertIn("other.id =", statement)
+    def test_sources_and_include_fields(self):
+        model = SqlQueryModel(
+            QueryBook,
+            models={"writer": QueryAuthor},
+            sources={"writer": QueryAuthor.__table__},
+            include_fields={"book": ["id", "author_id"], "writer": ["id"]},
+            model_name="SourceQuery",
+        )
+        self.assertEqual(
+            set(model.__sql_query_config__.models["writer"].references),
+            {"id"})
+        data = {
+            "joins": [{"model": "writer", "as": "w", "on": {"eq": [
+                book("author_id"), {"model": "writer", "as": "w",
+                                    "field": "id"}]}}],
+            "fields": [{"model": "writer", "as": "w", "field": "id"}],
+            "where": {"eq": [book("id"), 200]},
+        }
+        self.assertIn("JOIN author AS w", self.sql(data, model))
+        self.assertEqual(self.fetch(data, model), [{"w_id": 2}])
+        with self.assertRaises(ValidationError):
+            model.model_validate({"fields": [book("title")]})
 
     def test_custom_function_generators(self):
-        def sign(annotation):
-            if annotation is int:
-                yield SqlExpressionFunction(
-                    "sign", int, (Expr(int),),
-                    lambda v: func.min(func.max(v, -1), 1),
-                )
-
         def instr(annotation):
             if annotation is str:
                 yield SqlExpressionFunction(
                     "instr", int, (Expr(str), Expr(str)),
-                    lambda v, search: func.instr(v, search, type_=Integer()),
-                    description="Position of the search string (1-based).",
+                    lambda value, search: func.instr(
+                        value, search, type_=Integer()),
                 )
 
         mapping = default_sql_expression_mapping()
         mapping.function_generators = [
-            without(generator, "cast", "replace")
+            without(generator, "cast", "like")
             for generator in mapping.function_generators
         ]
-        mapping.add_functions(sign, instr)
+        mapping.add_functions(instr)
         model = SqlQueryModel(
-            QueryExample, mapping=mapping, model_name="CustomQuery")
-
+            QueryBook, mapping=mapping, model_name="CustomQuery")
         self.assertEqual(self.fetch({
-            "fields": [
-                {"sign": "amount"},
-                {"instr": ["name", {"value": "wurst"}], "alias": "position"},
-            ],
-            "where": {"id": {"in": [1, 3]}},
-        }, model), [
-            {"sign_amount": 1, "position": 5},
-            {"sign_amount": -1, "position": 0},
-        ])
+            "fields": [{"instr": [book("title"), "o"], "alias": "position"}],
+            "where": {"gt": [{"instr": [book("title"), "o"]}, 1]},
+        }, model), [{"position": 2}, {"position": 7}, {"position": 3}])
         definitions = model.model_json_schema()["$defs"]
         self.assertIn("CustomQueryInstrIntFunction", definitions)
         self.assertNotIn("CustomQueryCastStrFunction", definitions)
-        self.assertNotIn("CustomQueryReplaceStrFunction", definitions)
-        with self.assertRaises(ValidationError):
-            model.model_validate({"fields": [{"cast": ["amount", "string"]}]})
+        self.assertNotIn("CustomQueryLikeFunction", definitions)
 
     def test_restricted_functions(self):
         mapping = default_sql_expression_mapping()
         mapping.function_generators = [
-            only(generator, "lower", "count")
+            only(generator, "eq", "and")
             for generator in mapping.function_generators
         ]
         model = SqlQueryModel(
-            QueryExample, mapping=mapping, model_name="RestrictedQuery")
-        self.assertEqual(
-            {
-                name for name in model.model_json_schema()["$defs"]
-                if name.endswith("Function")
-            },
-            {"RestrictedQueryLowerStrFunction",
-             "RestrictedQueryCountIntFunction"},
-        )
-        model.model_validate({"fields": [{"lower": "name"}]})
+            QueryBook, mapping=mapping, model_name="RestrictedQuery")
+        model.model_validate({"where": {"and": [{"eq": [book("id"), 1]}]}})
         with self.assertRaises(ValidationError):
-            model.model_validate({"fields": [{"upper": "name"}]})
+            model.model_validate({"where": {"gt": [book("id"), 1]}})
 
     def test_custom_reference_generator(self):
-        def with_summary(context, model, name, field_info, annotation):
+        def with_label(context, model, name, field_info, annotation):
             yield from model_references(
                 context, model, name, field_info, annotation)
-            if name == "name":
+            if context.model_name == "book" and name == "title":
                 yield SqlFieldReference(
-                    "summary", str,
+                    "label", str,
                     lambda source: func.concat(
-                        source.name, ":", func.coalesce(
-                            source.description, "")),
+                        source.title, ":", source.price),
                     result_annotation=str,
                 )
 
         model = SqlQueryModel(
-            QueryExample,
-            reference_generators=[with_summary],
-            include_fields=["id", "name"],
-            model_name="SummaryQuery",
-        )
+            QueryBook, reference_generators=[with_label],
+            model_name="LabelQuery")
         self.assertEqual(self.fetch({
-            "fields": ["summary", {"upper": "summary"}],
-            "where": {"id": {"eq": 1}},
-        }, model), [{"summary": "bumpwurst:a test",
-                     "upper_summary": "BUMPWURST:A TEST"}])
+            "fields": [book("label"), {"upper": book("label")}],
+            "where": {"eq": [book("id"), 1]},
+        }, model), [{"label": "Momo:10.0", "upper_label": "MOMO:10.0"}])
 
     def test_reserved_function_names(self):
         def invalid(annotation):
             yield SqlExpressionFunction(
-                "alias", str, (Expr(str),), lambda v: v)
+                "model", str, (Expr(str),), lambda v: v)
 
         with self.assertRaises(ValueError):
             SqlQueryModel(
-                QueryExample,
+                QueryBook,
                 mapping=default_sql_expression_mapping().add_functions(
                     invalid),
                 model_name="InvalidQuery",
             )
 
-    def test_duplicate_references_raise(self):
-        def duplicate(context, model, name, field_info, annotation):
-            yield from model_references(
-                context, model, name, field_info, annotation)
-            yield from model_references(
-                context, model, name, field_info, annotation)
+    def test_models_without_table_are_rejected(self):
+        from pydantic import BaseModel
+
+        class Plain(BaseModel):
+            name: str
 
         with self.assertRaises(ValueError):
-            SqlQueryModel(QueryExample, reference_generators=[duplicate])
+            SqlQueryModel(Plain)

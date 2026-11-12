@@ -8,138 +8,121 @@ At least you will need to have the pydantic package installed. Of course it make
 
 ## Example
 
-### Typed SQL filter models
-
-`SqlFilterModel` generates a nested, fully typed filter model (incl. JSON
-schema) from a model and compiles it into a SQLAlchemy where clause.
-
-```python
-from sqlmodel import SQLModel, Field, select
-from querymodelling.sql_filter import SqlFilterModel
-
-class ExampleModel(SQLModel, table=True):
-    id: int | None = Field(default=None, primary_key=True)
-    name: str
-    description: str
-
-ExampleFilter = SqlFilterModel(ExampleModel)
-
-query = ExampleFilter.model_validate({
-    "and": {
-        "name": {"contains": "wurst", "startswith": "bump"},
-        "description": {"lower": {"contains": "test"}},
-    },
-    "or": [{"id": {"in": [1, 2]}}, {"name": {"length": {"gt": 3}}}],
-})
-statement = query.apply_sql(select(ExampleModel))
-# or: select(ExampleModel).where(query.to_sql_expression())
-```
-
-* Fields of the filter object are combined with `AND`.
-* `and` / `or` accept an object (its conditions are combined) or a list of
-  objects (each object is combined with `AND`, the list with the operator).
-  `not` negates an object. Everything can be nested.
-* Operators per type (default): `eq`, `ne`, `is_null`, `in`, `not_in`
-  (scalars), `gt`, `gte`, `lt`, `lte`, `between` (numbers, dates, times),
-  `contains`, `icontains`, `startswith`, `istartswith`, `endswith`,
-  `iendswith`, `like`, `not_like`, `ilike` (strings).
-* SQL functions per type (default): `lower`, `upper`, `trim`, `length`
-  (strings), `abs` (numbers), `date`, `year`, `month`, `day`, `hour`,
-  `minute` (dates / times). Functions return a filter of their result type,
-  e.g. `{"name": {"length": {"gt": 3}}}`.
-
-Everything is built from generators and can be extended or restricted:
-
-```python
-from querymodelling.sql_filter import (
-    SqlOperator, SqlFunction, default_sql_filter_mapping, for_types, without
-)
-
-def parity(annotation):
-    yield SqlOperator(
-        "even", lambda column, value: (column % 2 == 0) == value,
-        value_type=lambda annotation: bool)
-
-mapping = default_sql_filter_mapping(name_prefix="Custom")
-mapping.operator_generators = [
-    without(generator, "like", "ilike")
-    for generator in mapping.operator_generators
-]
-mapping.add_operators(for_types(parity, int, exclude=(bool,)))
-
-ExampleFilter = SqlFilterModel(ExampleModel, mapping=mapping)
-```
-
-* operator generators `(annotation) -> Iterable[SqlOperator]`
-* function generators `(annotation) -> Iterable[SqlFunction]`
-* field generators `(context, model, name, field_info, annotation) ->
-  Iterable[SqlFilterField]` (`field_generators=...`, e.g. virtual fields
-  based on SQL expressions)
-* logical generators `(model) -> Iterable[SqlLogicalOperator]`
-  (`logical_generators=...`)
-
-The filter can be used within existing query models as well:
-
-```python
-from querymodelling.pydantic import QueryField
-from querymodelling.sql_filter import sql_filter_expression
-
-class ExampleQuery(PageQuery, BaseModel):
-    filter: ExampleFilter | None = QueryField(
-        sql_filter_expression, default=None)
-```
-
 
 ### Typed SQL query models
 
-`SqlQueryModel` extends the filter by selectable `fields` (incl. SQL
-functions), `where` (the filter above) and `group_by`. All expressions are
-typed per result type and reflected in the JSON schema.
+`SqlQueryModel` generates a fully typed query model (incl. JSON schema)
+with `joins`, `fields`, `where`, `group_by` and subqueries, which is compiled
+into a SQLAlchemy select statement. Only the registered models can be
+queried.
 
 ```python
+from sqlmodel import Session
 from querymodelling.sql_query import SqlQueryModel
 
-ExampleQuery = SqlQueryModel(ExampleModel)
+BookQuery = SqlQueryModel(Book, models=[Author, Review])
 
-query = ExampleQuery.model_validate({
-    "fields": [
-        "name",
-        {"field": "id", "alias": "my_id"},
-        {"count": "id", "alias": "count_id"},
-        {"lower": "name"},
-        {"concat": ["name", {"value": " - "}, "description"]},
+query = BookQuery.model_validate({
+    "joins": [
+        {
+            "model": "author",
+            "type": "left",
+            "on": {"eq": [
+                {"model": "book", "field": "author_id"},
+                {"model": "author", "field": "id"}
+            ]}
+        }
     ],
-    "where": {"name": {"contains": "wurst"}},
-    "group_by": ["name", "id", "description"],
+    "fields": [
+        {"model": "book", "field": "id"},
+        {"model": "author", "field": "id", "alias": "author_id"},
+        {"lower": {"model": "author", "field": "name"}, "alias": "author_name"}
+    ],
+    "where": {"and": [
+        {"eq": [{"model": "book", "field": "id"}, 123]},
+        {"startswith": [{"model": "author", "field": "name"}, "M"]}
+    ]}
 })
 statement = query.to_select()      # SQLAlchemy select with labeled columns
 rows = query.fetch(session)        # list of typed result rows
-RowModel = query.result_model()    # e.g. {"name": str, "count_id": int, ...}
+RowModel = query.result_model()    # {"id": int | None, "author_id": ...}
 ```
 
-* An entry of `fields` is a field name or an object with exactly one
-  function (or `field`) and an optional `alias`. Without `fields` all fields
-  are selected. Labels without alias are generated (`lower_name`).
-* Arguments are typed expressions: field names (strings are always field
-  names), `{"field": ...}`, JSON numbers / booleans, `{"value": ...}` for
-  other literals (e.g. strings) or nested functions. `{"lower": "amount"}`
-  is rejected for an `int` field, `{"length": "name"}` is an `int`
-  expression.
-* Single arguments are passed directly (`{"lower": "name"}`), multiple ones
-  as list (`{"substring": ["name", 1, 3]}`).
-* Default functions:
-  * string: `lower`, `upper`, `trim`, `length`, `concat`, `substring`,
-    `replace`
-  * numeric: `abs`, `round`, `ceil`, `floor`, `add`, `sub`, `mul`, `div`
-  * date / time: `date`, `year`, `month`, `day`, `hour`, `minute`
-  * generic: `coalesce`, `nullif`, `cast` (`{"cast": ["amount", "string"]}`)
-  * aggregate: `count` (incl. `{"count": "*"}`), `count_distinct`, `sum`,
-    `avg`, `min`, `max`
-* Aggregates are validated: fields outside of aggregate functions must be
-  part of `group_by`, aggregates must not be nested.
+```sql
+SELECT book.id AS id, author.id AS author_id, lower(author.name) AS author_name
+FROM book LEFT OUTER JOIN author ON book.author_id = author.id
+WHERE book.id = 123 AND author.name LIKE 'M' || '%'
+```
 
-Functions are provided by generators `(annotation) -> Iterable[
-SqlExpressionFunction]` which are called for every known type:
+**One rule:** a plain JSON value (string, number, boolean) is always a
+constant, an object is an expression identified by its keys:
+
+| Object | Expression |
+|---|---|
+| `{"model": "book", "field": "id"}` | field (`"as"` selects a joined instance) |
+| `{"model": "review", "fields": [...], "where": ...}` | subquery (no `field`) |
+| `{"lower": ...}`, `{"eq": [...]}` | function (its only key besides `alias`) |
+| `{"ref": "author_name"}` | alias of `fields` (`group_by` only) |
+
+* **Query**: `model` (defaults to the base model), `as`, `joins`, `fields`
+  (all fields of the queried model if not set), `where`, `group_by`.
+  Subqueries have the same structure.
+* **Joins**: `{"model", "as", "type", "on"}` with `type` `inner` (default),
+  `left` or `full`. `on` may reference the queried model and the previous
+  joins. A model joined twice needs `as`, it is referenced by
+  `{"model": "author", "as": "reviewer", "field": "name"}`. Fields of the
+  outer side of an outer join are `Optional` in the result model.
+* **Conditions** (`where`, `on`) are functions returning `bool`:
+  `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `between`, `in`, `not_in`
+  (`{"in": [x, [1, 2]]}` or `{"in": [x, <subquery>]}`), `contains`,
+  `icontains`, `startswith`, `istartswith`, `endswith`, `iendswith`, `like`,
+  `not_like`, `ilike`, `is_null`, `is_not_null`, `and`, `or`, `not` and
+  `exists` (`{"exists": <subquery>}`).
+* **Functions**: `lower`, `upper`, `trim`, `length`, `concat`, `substring`,
+  `replace`, `abs`, `round`, `ceil`, `floor`, `add`, `sub`, `mul`, `div`,
+  `date`, `year`, `month`, `day`, `hour`, `minute`, `coalesce`, `nullif`,
+  `cast` (`{"cast": [x, "string"]}`) and the aggregates `count`
+  (`{"count": "*"}` counts all rows), `count_distinct`, `sum`, `avg`, `min`,
+  `max`.
+* **Subqueries** used as value or in `in` return exactly one field, its type
+  is the type of the expression. Subqueries may reference the models of the
+  outer queries, inner models shadow outer ones with the same name (use
+  `as`).
+* **Typing**: all expressions are typed per result type, e.g.
+  `{"lower": <int field>}` or `{"eq": [<int field>, "x"]}` are rejected by
+  the JSON schema and the validation.
+* **Grouping**: fields outside of aggregate functions must be part of
+  `group_by`, aggregates must not be nested and are not allowed in `where`,
+  `on` and `group_by`. An empty `group_by` means no grouping.
+* **Limits**: `max_joins` (default 5) per (sub)query and `max_depth`
+  (default 3) of nested subqueries.
+
+```json
+{
+  "joins": [{"model": "author", "type": "left", "on": {"eq": [
+    {"model": "book", "field": "author_id"}, {"model": "author", "field": "id"}
+  ]}}],
+  "fields": [
+    {"lower": {"model": "author", "field": "name"}, "alias": "author_name"},
+    {"count": "*", "alias": "books"},
+    {"model": "review", "fields": [{"avg": {"model": "review", "field": "rating"}}],
+     "where": {"eq": [{"model": "review", "field": "book_id"}, {"model": "book", "field": "id"}]},
+     "alias": "avg_rating"}
+  ],
+  "where": {"exists": {"model": "review", "where": {"eq": [
+    {"model": "review", "field": "book_id"}, {"model": "book", "field": "id"}
+  ]}}},
+  "group_by": [{"ref": "author_name"}, {"model": "book", "field": "id"}]
+}
+```
+
+Models are registered by their table name (`models=[Author]`) or explicitly
+(`models={"writer": Author}`). `sources` overrides the table of a model,
+`include_fields` / `exclude_fields` restrict the fields (a list for the base
+model or a mapping of model names to lists).
+
+Functions and conditions are provided by generators `(annotation) ->
+Iterable[SqlExpressionFunction]` which are called for every known type:
 
 ```python
 from sqlalchemy import Integer, func
@@ -160,8 +143,11 @@ mapping.function_generators = [
 ]
 mapping.add_functions(instr)
 
-ExampleQuery = SqlQueryModel(ExampleModel, mapping=mapping)
+BookQuery = SqlQueryModel(Book, models=[Author], mapping=mapping)
 ```
 
-Referenceable fields are provided by reference generators
-(`reference_generators=...`, e.g. virtual fields based on SQL expressions).
+Argument placeholders are `Expr(*types)` (an expression of the types, any
+type if empty), `Many(type)` (a list or a subquery, see `in`) and `Query()`
+(a subquery, see `exists`). Referenceable fields are provided by reference
+generators (`reference_generators=...`, e.g. virtual fields based on SQL
+expressions).
