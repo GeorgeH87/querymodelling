@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, create_model
 from typing_extensions import TypeAliasType
 
 from ..sql_filter import _alias, _python_name, _type_name
+from .access import C, SqlModelAccess
 from .expressions import (
     Expr, Label, Many, Query, SqlAliasReference, SqlExpressionFunction,
     SqlFieldExpression, SqlFunctionExpression
@@ -16,7 +17,7 @@ from .mapping import DEFAULT_SQL_EXPRESSION_MAPPING, SqlExpressionMapping
 from .query import SqlJoin, SqlQuery, SqlSubquery
 from .references import (
     DEFAULT_REFERENCE_GENERATORS, FieldSelection, ReferenceGenerator,
-    collect_models
+    SqlModelInfo, collect_models
 )
 from .scope import SqlQueryConfig
 from .unions import (
@@ -335,6 +336,25 @@ class SqlQueryModelBuilder:
         self.namespace[name] = TypeAliasType(name, tagged_union(groups))
 
 
+def build_query_model(
+    infos: dict[str, SqlModelInfo],
+    default_model: str,
+    mapping: SqlExpressionMapping,
+    prefix: str,
+    max_joins: int,
+    max_depth: int,
+) -> type[SqlQuery]:
+    """Builds the query model of collected models."""
+    config = SqlQueryConfig(
+        models=infos,
+        default_model=default_model,
+        max_joins=max_joins,
+        max_depth=max_depth,
+        result_name=f"{prefix}Result",
+    )
+    return SqlQueryModelBuilder(prefix, mapping, config).build()
+
+
 def SqlQueryModel(
     base_model: type[BaseModel],
     *,
@@ -346,6 +366,8 @@ def SqlQueryModel(
     exclude_fields: FieldSelection = None,
     include_fields: FieldSelection = None,
     use_alias_reference: bool = True,
+    access: Optional[Mapping[str, SqlModelAccess[C, Any]]] = None,
+    context: C = None,
     max_joins: int = 5,
     max_depth: int = 3,
     model_name: Optional[str] = None,
@@ -368,23 +390,27 @@ def SqlQueryModel(
         mapping of model names to lists.
     :param include_fields: Fields to include, like ``exclude_fields``.
     :param use_alias_reference: Reference fields by their alias.
+    :param access: Access rules per model name, they take precedence over
+        the rules declared on the models (``__sql_access__``, fields
+        annotated with ``SqlFieldAccess``).
+    :param context: The access context (any object, e.g. the user) the
+        access rules are evaluated for, ``None`` if not given. Use
+        :class:`SqlQueryFactory` to create (cached) query models per
+        context.
     :param max_joins: Maximum number of joins per (sub)query.
     :param max_depth: Maximum nesting depth of subqueries.
     :param model_name: Name of the model (prefix of all generated models),
         defaults to ``<BaseModel>SqlQuery``.
     :return: The query model.
+    :raises SqlAccessDenied: The base model is not accessible.
     """
     mapping = DEFAULT_SQL_EXPRESSION_MAPPING if mapping is None else mapping
-    prefix = model_name or f"{base_model.__name__}SqlQuery"
     infos, default_model = collect_models(
         mapping, base_model, models, sources, reference_generators,
-        exclude_fields, include_fields, use_alias_reference,
+        exclude_fields, include_fields, use_alias_reference, access,
+        context,
     )
-    config = SqlQueryConfig(
-        models=infos,
-        default_model=default_model,
-        max_joins=max_joins,
-        max_depth=max_depth,
-        result_name=f"{prefix}Result",
+    return build_query_model(
+        infos, default_model, mapping,
+        model_name or f"{base_model.__name__}SqlQuery", max_joins, max_depth,
     )
-    return SqlQueryModelBuilder(prefix, mapping, config).build()

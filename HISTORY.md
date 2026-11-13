@@ -15,6 +15,9 @@ Release History
 -   sql_query: joins, subqueries (``exists``, ``in``, scalar) and conditions
     as typed expressions (``{"eq": [a, b]}``), fields are referenced by
     ``{"model", "field"}``, plain JSON values are constants
+-   sql_query: access rules of models (usage, rows) and fields per user
+    (``SqlModelAccess``, ``SqlFieldAccess``) and query models per user
+    (``SqlQueryFactory``)
 
 0.0.12 (2025-10-27)
 

@@ -4,6 +4,7 @@ queries, inner instances shadow outer ones with the same key)."""
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
+from sqlalchemy import select
 from sqlalchemy.orm import aliased
 from sqlalchemy.sql.expression import FromClause
 
@@ -21,13 +22,26 @@ class SqlInstance:
     nullable: bool = False
     entity: Any = None
 
-    def create_entity(self) -> Any:
+    def create_entity(self, context: Any = None) -> Any:
+        """The SQL entity of the instance. Models with a rows rule are
+        replaced by a derived table of the permitted rows, which restricts
+        them in every position (also on the outer side of outer joins)."""
         source = self.info.source
-        if self.key == self.info.name:
-            return source
+        if self.info.rows is None:
+            if self.key == self.info.name:
+                return source
+            if isinstance(source, FromClause):
+                return source.alias(self.key)
+            return aliased(source, name=self.key)
+        inner = (
+            source.alias() if isinstance(source, FromClause)
+            else aliased(source)
+        )
+        condition = self.info.rows(context, inner)
+        rows = select(inner).where(condition).subquery(self.key)
         if isinstance(source, FromClause):
-            return source.alias(self.key)
-        return aliased(source, name=self.key)
+            return rows
+        return aliased(source, rows, name=self.key, adapt_on_names=True)
 
 
 Scopes = tuple[dict[str, SqlInstance], ...]

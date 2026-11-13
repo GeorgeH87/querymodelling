@@ -51,8 +51,15 @@ Everything is assembled from generators:
 * reference generators ``(context, model, name, field_info, annotation) ->
   Iterable[SqlFieldReference]`` yield the referenceable fields.
 
+Access rules restrict models (``__sql_access__ = SqlModelAccess(...)``) and
+fields (``Annotated[str, SqlFieldAccess(...)]``) per access context (any
+object, e.g. the user), see :mod:`.access` and :class:`SqlQueryFactory`.
+Without rules everything is allowed.
+
 Modules:
 
+* :mod:`.access` - access rules of models and fields,
+* :mod:`.factory` - query models per access context,
 * :mod:`.expressions` - argument placeholders, function definitions and the
   base classes of the generated expression models,
 * :mod:`.functions` - the default SQL functions,
@@ -64,7 +71,11 @@ Modules:
 * :mod:`.query` - validation, compilation into SQL and typed results,
 * :mod:`.builder` - generation of the query models.
 """
-from .builder import SqlQueryModel, SqlQueryModelBuilder
+from .access import (
+    INVISIBLE, VISIBLE, FieldUsage, ModelUsage, RowsRule, Rule,
+    SqlAccessDenied, SqlFieldAccess, SqlModelAccess, resolve_rule
+)
+from .builder import SqlQueryModel, SqlQueryModelBuilder, build_query_model
 from .conditions import (
     AND, CONTAINS, ENDSWITH, EXISTS, ICONTAINS, IENDSWITH, ILIKE, IS_NOT_NULL,
     IS_NULL, ISTARTSWITH, LIKE, NOT, NOT_LIKE, OR, STARTSWITH,
@@ -76,6 +87,7 @@ from .expressions import (
     SqlAliasReference, SqlExpressionBase, SqlExpressionFunction,
     SqlFieldExpression, SqlFunctionExpression, SqlQueryExpression
 )
+from .factory import SqlQueryFactory, access_signature
 from .functions import (
     CAST_TYPES, CASTS, CONCAT, COUNT, COUNT_DISTINCT, DATE, DAY,
     DEFAULT_VALUE_FUNCTION_GENERATORS, HOUR, LENGTH, LOWER, MINUTE, MONTH,
@@ -91,7 +103,10 @@ from .mapping import (
     SqlExpressionMapping, default_sql_expression_mapping, function_key,
     is_scalar_type
 )
-from .query import SqlJoin, SqlQuery, SqlQueryBase, SqlQueryColumn, SqlSubquery
+from .query import (
+    ACCESS_CONTEXT_KEY, SqlJoin, SqlQuery, SqlQueryBase, SqlQueryColumn,
+    SqlSubquery
+)
 from .references import (
     DEFAULT_REFERENCE_GENERATORS, ReferenceGenerator, SqlFieldReference,
     SqlModelInfo, SqlQueryContext, collect_models, collect_references,
@@ -100,16 +115,20 @@ from .references import (
 from .scope import SqlInstance, SqlQueryConfig, resolve_instance
 
 __all__ = [
-    "SqlQueryModel", "SqlQueryModelBuilder", "AND", "CONTAINS", "ENDSWITH",
-    "EXISTS", "ICONTAINS", "IENDSWITH", "ILIKE", "IS_NOT_NULL", "IS_NULL",
+    "INVISIBLE", "VISIBLE", "FieldUsage", "RowsRule", "Rule",
+    "SqlFieldAccess", "SqlModelAccess", "ModelUsage", "SqlAccessDenied",
+    "resolve_rule", "SqlQueryModel", "SqlQueryModelBuilder",
+    "build_query_model", "AND", "CONTAINS", "ENDSWITH", "EXISTS",
+    "ICONTAINS", "IENDSWITH", "ILIKE", "IS_NOT_NULL", "IS_NULL",
     "ISTARTSWITH", "LIKE", "NOT", "NOT_LIKE", "OR", "STARTSWITH",
     "DEFAULT_CONDITION_GENERATORS", "comparison", "comparison_conditions",
     "logical_conditions", "null_conditions", "string_conditions",
-    "LABEL_MAX_LENGTH", "RESERVED_KEYS", "Expr", "Label", "Many", "Query",
-    "SqlAliasReference", "SqlExpressionBase", "SqlExpressionFunction",
-    "SqlFieldExpression", "SqlFunctionExpression", "SqlQueryExpression",
-    "CAST_TYPES", "CASTS", "CONCAT", "COUNT", "COUNT_DISTINCT", "DATE",
-    "DAY", "DEFAULT_VALUE_FUNCTION_GENERATORS", "HOUR", "LENGTH", "LOWER",
+    "SqlQueryFactory", "access_signature", "LABEL_MAX_LENGTH",
+    "RESERVED_KEYS", "Expr", "Label", "Many", "Query", "SqlAliasReference",
+    "SqlExpressionBase", "SqlExpressionFunction", "SqlFieldExpression",
+    "SqlFunctionExpression", "SqlQueryExpression", "CAST_TYPES", "CASTS",
+    "CONCAT", "COUNT", "COUNT_DISTINCT", "DATE", "DAY",
+    "DEFAULT_VALUE_FUNCTION_GENERATORS", "HOUR", "LENGTH", "LOWER",
     "MINUTE", "MONTH", "NUMERIC_EXPRESSION_TYPES",
     "ORDERED_EXPRESSION_TYPES", "REPLACE", "SUBSTRING", "TRIM", "UPPER",
     "YEAR", "ExpressionFunctionGenerator",
@@ -120,9 +139,10 @@ __all__ = [
     "DEFAULT_LITERAL_TYPES", "DEFAULT_SQL_EXPRESSION_MAPPING",
     "DEFAULT_TYPE_ORDER", "SqlExpressionMapping",
     "default_sql_expression_mapping", "function_key", "is_scalar_type",
-    "SqlJoin", "SqlQuery", "SqlQueryBase", "SqlQueryColumn", "SqlSubquery",
-    "DEFAULT_REFERENCE_GENERATORS", "ReferenceGenerator",
-    "SqlFieldReference", "SqlModelInfo", "SqlQueryContext",
-    "collect_models", "collect_references", "default_model_name",
-    "model_references", "SqlInstance", "SqlQueryConfig", "resolve_instance",
+    "ACCESS_CONTEXT_KEY", "SqlJoin", "SqlQuery", "SqlQueryBase",
+    "SqlQueryColumn", "SqlSubquery", "DEFAULT_REFERENCE_GENERATORS",
+    "ReferenceGenerator", "SqlFieldReference", "SqlModelInfo",
+    "SqlQueryContext", "collect_models", "collect_references",
+    "default_model_name", "model_references", "SqlInstance",
+    "SqlQueryConfig", "resolve_instance",
 ]

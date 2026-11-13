@@ -4,21 +4,36 @@ import re
 from typing import Any, ClassVar, NamedTuple, Optional
 
 from pydantic import (
-    BaseModel, ConfigDict, Field, create_model, model_validator
+    BaseModel, ConfigDict, Field, PrivateAttr, ValidationInfo, create_model,
+    model_validator
 )
 from sqlalchemy import literal, literal_column, select
 from sqlalchemy.orm import join as orm_join
 from sqlalchemy.sql import Select
 
 from ..sql_filter import _alias, _python_name
+from .access import FieldUsage, ModelUsage
 from .expressions import (
-    LABEL_MAX_LENGTH, Expr, Query, SqlAliasReference, SqlFieldExpression,
-    SqlFunctionExpression, SqlQueryExpression, contains_aggregate,
-    contains_alias, walk
+    LABEL_MAX_LENGTH, Expr, Query, SqlAliasReference, SqlExpressionBase,
+    SqlFieldExpression, SqlFunctionExpression, SqlQueryExpression,
+    contains_aggregate, contains_alias
 )
 from .scope import (
     Scopes, SqlInstance, SqlQueryConfig, reference_label, resolve_instance
 )
+
+
+ACCESS_CONTEXT_KEY = "sql_access_context"
+"""Key of the access context within the validation context
+(``model_validate(data, context={ACCESS_CONTEXT_KEY: context})``), passed
+to the rows rules (``None`` if not given)."""
+
+CLAUSES = {
+    FieldUsage.SELECT: "fields",
+    FieldUsage.FILTER: "where / on",
+    FieldUsage.GROUP: "group_by",
+    FieldUsage.AGGREGATE: "aggregate functions",
+}
 
 
 class SqlQueryColumn(NamedTuple):
@@ -42,6 +57,8 @@ class SqlQueryBase(SqlQueryExpression):
     """Base of the generated query and subquery models."""
 
     __sql_query_config__: ClassVar[SqlQueryConfig]
+
+    _sql_context: Any = PrivateAttr(default=None)
 
     @property
     def model_name(self) -> str:
@@ -72,8 +89,8 @@ class SqlQueryBase(SqlQueryExpression):
         return instances
 
     def selected(self) -> list[Any]:
-        """The entries of ``fields`` (all fields of the queried model if
-        not set)."""
+        """The entries of ``fields`` (all selectable fields of the queried
+        model if not set)."""
         if self.fields is not None:
             return list(self.fields)
         config = self.__sql_query_config__
@@ -82,7 +99,9 @@ class SqlQueryBase(SqlQueryExpression):
         return [
             model.model_validate(
                 {"model": self.model_name, "field": name, **extra})
-            for name in config.models[self.model_name].references
+            for name, reference in config.models[
+                self.model_name].references.items()
+            if FieldUsage.SELECT in reference.access
         ]
 
     def aliases(self) -> dict[str, Any]:
@@ -156,9 +175,12 @@ class SqlQueryBase(SqlQueryExpression):
             return ("query", value.model_dump_json(exclude={"alias"}))
         return ("constant", repr(value))
 
-    def validate_query(self, outer: Scopes = (), depth: int = 0):
+    def validate_query(
+        self, outer: Scopes = (), depth: int = 0, context: Any = None
+    ):
         """Validates the query and its subqueries within the scopes of the
-        outer queries."""
+        outer queries within the access context."""
+        self._sql_context = context
         config = self.__sql_query_config__
         if depth > config.max_depth:
             raise ValueError(
@@ -168,20 +190,25 @@ class SqlQueryBase(SqlQueryExpression):
         if len(self.joins or ()) > config.max_joins:
             raise ValueError(f"at most {config.max_joins} joins are allowed")
         instances = self.instances()
+        self._check_usage(instances, depth)
         keys = list(instances)
         for index, join in enumerate(self.joins or ()):
             visible = {key: instances[key] for key in keys[:index + 2]}
-            self._check_condition(join.on, (visible, *outer), depth, "on")
+            self._check_condition(
+                join.on, (visible, *outer), depth, "on", FieldUsage.FILTER)
 
         scopes = (instances, *outer)
         for item in self.fields or ():
             if contains_alias(item, nested_only=True):
                 raise ValueError(
                     "alias is only allowed on the entries of fields")
-            self._check_expression(item, scopes, depth)
+            self._check_expression(item, scopes, depth, FieldUsage.SELECT)
+        if depth == 0 and not self.selected():
+            raise ValueError("there are no fields to select")
         self.labels()
         if self.where is not None:
-            self._check_condition(self.where, scopes, depth, "where")
+            self._check_condition(
+                self.where, scopes, depth, "where", FieldUsage.FILTER)
 
         aliases = self.aliases()
         for item in self.group_by or ():
@@ -189,8 +216,11 @@ class SqlQueryBase(SqlQueryExpression):
                 if item.ref not in aliases:
                     raise ValueError(
                         f"group_by: {item.ref!r} is no alias of fields")
+                self._check_expression(
+                    aliases[item.ref], scopes, depth, FieldUsage.GROUP)
             else:
-                self._check_condition(item, scopes, depth, "group_by")
+                self._check_condition(
+                    item, scopes, depth, "group_by", FieldUsage.GROUP)
         grouped = self.grouped()
         if any(map(contains_aggregate, grouped)):
             raise ValueError(
@@ -201,20 +231,54 @@ class SqlQueryBase(SqlQueryExpression):
             for item in selected:
                 self._check_grouped(item, keys, False)
 
-    def _check_condition(self, value, scopes: Scopes, depth: int, clause):
+    def _check_usage(self, instances: dict[str, SqlInstance], depth: int):
+        root, *joined = instances.values()
+        usage = ModelUsage.SUBQUERY if depth else ModelUsage.QUERY
+        checks = [(root, usage)] + [(i, ModelUsage.JOIN) for i in joined]
+        for instance, usage in checks:
+            if usage not in instance.info.usage:
+                where = {
+                    ModelUsage.QUERY: "be queried",
+                    ModelUsage.SUBQUERY: "be used within subqueries",
+                    ModelUsage.JOIN: "be joined",
+                }[usage]
+                raise ValueError(
+                    f"model {instance.info.name!r} must not {where}")
+
+    def _check_condition(
+        self, value, scopes: Scopes, depth: int, clause: str, usage: FieldUsage
+    ):
         if contains_alias(value):
             raise ValueError(f"alias is not allowed within {clause}")
         if contains_aggregate(value):
             raise ValueError(
                 f"aggregate functions are not allowed within {clause}")
-        self._check_expression(value, scopes, depth)
+        self._check_expression(value, scopes, depth, usage)
 
-    def _check_expression(self, value: Any, scopes: Scopes, depth: int):
-        for node in walk(value):
-            if isinstance(node, SqlFieldExpression):
-                resolve_instance(node, scopes)
-            elif isinstance(node, SqlQueryBase):
-                node.validate_query(scopes, depth + 1)
+    def _check_expression(
+        self, value: Any, scopes: Scopes, depth: int, usage: FieldUsage
+    ):
+        """Resolves the fields, checks their access and validates the
+        subqueries. Fields within aggregate functions require
+        ``AGGREGATE``."""
+        if isinstance(value, SqlFieldExpression):
+            instance = resolve_instance(value, scopes)
+            access = instance.info.references[value.field].access
+            if usage not in access:
+                raise ValueError(
+                    f"field {value.instance_key}.{value.field} must not be "
+                    f"used within {CLAUSES[usage]}"
+                )
+        elif isinstance(value, SqlQueryBase):
+            value.validate_query(scopes, depth + 1, self._sql_context)
+        elif isinstance(value, SqlExpressionBase):
+            if (
+                isinstance(value, SqlFunctionExpression)
+                and value.__sql_function__.aggregate
+            ):
+                usage = FieldUsage.AGGREGATE
+            for child in value.sql_children():
+                self._check_expression(child, scopes, depth, usage)
 
     def _check_grouped(self, value: Any, grouped: set, aggregated: bool):
         if not aggregated and self._key(value) in grouped:
@@ -280,7 +344,7 @@ class SqlQueryBase(SqlQueryExpression):
         """The scopes of the query with the SQL entities of its models."""
         instances = self.instances()
         for instance in instances.values():
-            instance.entity = instance.create_entity()
+            instance.entity = instance.create_entity(self._sql_context)
         return (instances, *outer)
 
     def to_select(self, outer: Scopes = ()) -> Select:
@@ -326,8 +390,10 @@ class SqlQuery(SqlQueryBase):
     """Base of the generated (root) query models."""
 
     @model_validator(mode="after")
-    def _validate_sql_query(self):
-        self.validate_query()
+    def _validate_sql_query(self, info: ValidationInfo):
+        context = info.context if isinstance(info.context, dict) else {}
+        self.validate_query(
+            context=context.get(ACCESS_CONTEXT_KEY))
         return self
 
     def columns(self) -> list[SqlQueryColumn]:

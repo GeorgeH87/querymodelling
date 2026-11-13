@@ -151,3 +151,61 @@ type if empty), `Many(type)` (a list or a subquery, see `in`) and `Query()`
 (a subquery, see `exists`). Referenceable fields are provided by reference
 generators (`reference_generators=...`, e.g. virtual fields based on SQL
 expressions).
+
+#### Access rules
+
+Models and fields can be restricted per access context - any object of the
+application, e.g. the user. Without rules everything is allowed. Rules are
+fixed values or callables `(context) -> flags | bool` receiving the context
+directly, `None` if no context is given. The declarations are generic in the
+type of the context (`None` if not given, `SqlFieldAccess[User]`,
+`SqlQueryFactory[User]`), `SqlModelAccess` also in the model of the rows
+rule (`SqlModelAccess[User, Self]` within the class body, the model defaults
+to `Any`).
+
+```python
+from typing import Annotated, Self
+from querymodelling.sql_query import (
+    INVISIBLE, FieldUsage, ModelUsage, SqlFieldAccess, SqlModelAccess,
+    SqlQueryFactory
+)
+
+class Book(SQLModel, table=True):
+    __sql_access__ = SqlModelAccess[User, Self](
+        # rows of the user's tenant only - in every position
+        rows=lambda user, book: book.tenant_id == user.tenant_id,
+    )
+    id: int | None = Field(default=None, primary_key=True)
+    title: str
+    cost: Annotated[float, SqlFieldAccess[User](lambda user: (
+        FieldUsage.ALL if user.is_admin else FieldUsage.AGGREGATE))]
+    tenant_id: Annotated[int, SqlFieldAccess(INVISIBLE)]
+
+class Salary(SQLModel, table=True):
+    __sql_access__ = SqlModelAccess[User](usage=lambda user: user.is_admin)
+    ...
+
+queries = SqlQueryFactory[User](Book, models=[Author, Salary])
+queries.schema(user)                   # JSON schema of the user
+query = queries.validate(data, user)   # validated for the user
+query.fetch(session)                   # rows rules applied for the user
+```
+
+* Fields: `FieldUsage.SELECT` (`fields`), `FILTER` (`where`, `on`), `GROUP`
+  (`group_by`), `AGGREGATE` (within aggregate functions), `ALL` / `NONE`
+  (`VISIBLE` / `INVISIBLE`), declared by `Annotated[..., SqlFieldAccess(rule)]`
+  or `SqlModelAccess(fields={"name": rule})`.
+* Models: `ModelUsage.QUERY` (queried model), `JOIN`, `SUBQUERY`, declared
+  by `__sql_access__ = SqlModelAccess(usage=rule)`.
+* `rows`: `(context, entity) -> condition` restricts the rows of a model
+  wherever it is used (queried model, joins incl. outer joins, subqueries),
+  the model is replaced by a derived table of the permitted rows.
+* `SqlQueryModel(..., access={"book": SqlModelAccess(...)})` overrides the
+  declared rules, `SqlQueryModel(..., context=user)` evaluates them for a
+  context.
+* Models and fields without any access are removed from the query model and
+  its JSON schema (and are reported as unknown), partial access is checked
+  by the validation. `SqlQueryFactory` caches the query models per
+  permission signature: contexts with the same permissions share them.
+* Partial access may still reveal values: `FILTER` by comparisons,
+  `AGGREGATE` by `min` / `max` of a single row.
