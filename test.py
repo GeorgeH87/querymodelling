@@ -52,8 +52,8 @@ class Author(ExampleModel, table=True):
 class Book(ExampleModel, table=True):
     # every user only sees the books of his tenant - in every position:
     # queried model, joins and subqueries
-    __sql_access__ = SqlModelAccess(
-        rows=lambda user, book:
+    __sql_access__ = SqlModelAccess[User, Self](
+        rows=lambda user, book: book.tenant_id == user.tenant_id,
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)

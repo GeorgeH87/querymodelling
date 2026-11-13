@@ -12,6 +12,7 @@ from sqlalchemy.sql.elements import BindParameter
 
 from ..sql_filter import SCALAR_TYPES, is_type
 from .expressions import Expr, SqlExpressionFunction
+from .results import Nullability, describe, inherit
 
 
 ExpressionFunctionGenerator = Callable[[Any], Iterable[SqlExpressionFunction]]
@@ -27,13 +28,13 @@ ORDERED_EXPRESSION_TYPES: tuple[type, ...] = (
 
 LOWER = _function(
     "lower", str, (Expr(str),), lambda v: func.lower(v, type_=String()),
-    description="SQL LOWER()")
+    result_field=describe(), description="SQL LOWER()")
 UPPER = _function(
     "upper", str, (Expr(str),), lambda v: func.upper(v, type_=String()),
-    description="SQL UPPER()")
+    result_field=describe(), description="SQL UPPER()")
 TRIM = _function(
     "trim", str, (Expr(str),), lambda v: func.trim(v, type_=String()),
-    description="SQL TRIM()")
+    result_field=describe(), description="SQL TRIM()")
 LENGTH = _function(
     "length", int, (Expr(str),), lambda v: func.length(v, type_=Integer()),
     description="SQL LENGTH()")
@@ -94,7 +95,7 @@ CAST_TYPES: dict[str, tuple[type, Any]] = {
 def _cast(name: str, result_type: type, sql_type: Any):
     return _function(
         "cast", result_type, (Expr(), Literal[name]),
-        lambda v, _: cast(v, sql_type()),
+        lambda v, _: cast(v, sql_type()), result_field=describe(),
         description=f"SQL CAST(): [value, \"{name}\"]")
 
 
@@ -109,17 +110,17 @@ def _typed(name: str, result_type: Any, *args, **kwargs):
     factories = {
         "abs": lambda: _function(
             "abs", result_type, (Expr(result_type),), func.abs,
-            description="SQL ABS()"),
+            result_field=describe(), description="SQL ABS()"),
         "round": lambda: _function(
             "round", result_type, (Expr(result_type), Expr(int)),
-            func.round, min_args=1,
+            func.round, min_args=1, result_field=describe(),
             description="SQL ROUND(): value or [value, decimals]"),
         "ceil": lambda: _function(
             "ceil", result_type, (Expr(result_type),), func.ceil,
-            description="SQL CEIL()"),
+            result_field=describe(), description="SQL CEIL()"),
         "floor": lambda: _function(
             "floor", result_type, (Expr(result_type),), func.floor,
-            description="SQL FLOOR()"),
+            result_field=describe(), description="SQL FLOOR()"),
         "add": lambda: _function(
             "add", result_type, (Expr(result_type), Expr(result_type)),
             lambda a, b: a + b, description="[a, b]: a + b"),
@@ -131,26 +132,33 @@ def _typed(name: str, result_type: Any, *args, **kwargs):
             lambda a, b: a * b, description="[a, b]: a * b"),
         "div": lambda: _function(
             "div", result_type, (Expr(result_type), Expr(result_type)),
-            lambda a, b: a / b, description="[a, b]: a / b"),
+            lambda a, b: a / b, nullable=Nullability.ALWAYS,
+            description="[a, b]: a / b (NULL if b is 0 in some databases)"),
         "sum": lambda: _function(
             "sum", result_type, (Expr(result_type),), func.sum,
-            aggregate=True, description="SQL SUM()"),
+            aggregate=True, nullable=Nullability.ALWAYS,
+            result_field=describe(), description="SQL SUM()"),
         "avg": lambda: _function(
             "avg", result_type, (Expr(result_type),), func.avg,
-            aggregate=True, description="SQL AVG()"),
+            aggregate=True, nullable=Nullability.ALWAYS,
+            result_field=describe(), description="SQL AVG()"),
         "min": lambda: _function(
             "min", result_type, (Expr(result_type),), func.min,
-            aggregate=True, description="SQL MIN()"),
+            aggregate=True, nullable=Nullability.ALWAYS,
+            result_field=inherit(), description="SQL MIN()"),
         "max": lambda: _function(
             "max", result_type, (Expr(result_type),), func.max,
-            aggregate=True, description="SQL MAX()"),
+            aggregate=True, nullable=Nullability.ALWAYS,
+            result_field=inherit(), description="SQL MAX()"),
         "coalesce": lambda: _function(
             "coalesce", result_type, (Expr(result_type),), func.coalesce,
-            variadic=True, min_args=2,
+            variadic=True, min_args=2, nullable=Nullability.COALESCE,
+            result_field=describe(),
             description="SQL COALESCE(): first value which is not NULL"),
         "nullif": lambda: _function(
             "nullif", result_type, (Expr(result_type), Expr(result_type)),
-            func.nullif, description="SQL NULLIF(): [value, null value]"),
+            func.nullif, nullable=Nullability.ALWAYS, result_field=inherit(),
+            description="SQL NULLIF(): [value, null value]"),
     }
     return factories[name]()
 

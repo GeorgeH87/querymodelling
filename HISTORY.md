@@ -18,6 +18,9 @@ Release History
 -   sql_query: access rules of models (usage, rows) and fields per user
     (``SqlModelAccess``, ``SqlFieldAccess``) and query models per user
     (``SqlQueryFactory``)
+-   sql_query: result models and schemas of validated queries copy the
+    information of the selected fields, functions define their nullability
+    and result field (``Nullability``, ``inherit``, ``describe``)
 
 0.0.12 (2025-10-27)
 

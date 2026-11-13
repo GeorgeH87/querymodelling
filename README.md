@@ -45,7 +45,7 @@ query = BookQuery.model_validate({
 })
 statement = query.to_select()      # SQLAlchemy select with labeled columns
 rows = query.fetch(session)        # list of typed result rows
-RowModel = query.result_model()    # {"id": int | None, "author_id": ...}
+RowModel = query.result_model()    # typed row, without executing the query
 ```
 
 ```sql
@@ -151,6 +151,38 @@ type if empty), `Many(type)` (a list or a subquery, see `in`) and `Query()`
 (a subquery, see `exists`). Referenceable fields are provided by reference
 generators (`reference_generators=...`, e.g. virtual fields based on SQL
 expressions).
+
+#### Result schema
+
+The result of a validated query is known without executing it:
+`query.result_model()` is the typed model of a result row,
+`query.result_schema()` the JSON schema of the result rows
+(`result_schema(many=False)` of a single row).
+
+* Fields copy the information of their source field: type, `title`,
+  `description`, `examples`, `json_schema_extra`, `deprecated` and the
+  constraints (`max_length`, `ge`, ...). They may be `NULL` if their field is
+  optional or on the outer side of an outer join.
+* Constants are of their type and never `NULL`.
+* Functions define their result: `result_type`, `nullable` and
+  `result_field`:
+  * `nullable` (`Nullability`): `PROPAGATE` (default, `NULL` if any argument
+    may be `NULL`), `COALESCE` (if all arguments may be), `ALWAYS` (e.g.
+    `sum`, `avg`, `min`, `max`, `nullif`, `div`) or `NEVER` (e.g. `count`,
+    `is_null`, `exists`), `True` / `False` for always / never.
+  * `result_field`: field information from the arguments, `inherit()` (all
+    of the argument, e.g. `min`, `max`, `nullif`) or `describe()` (only its
+    title and description, e.g. `lower`, `round`, `avg`, `coalesce`).
+    Without a rule the result has no field information.
+* Subqueries are the result of their single field, `NULL` if they may return
+  no row (an aggregate without `group_by` always returns one row).
+
+```python
+SqlExpressionFunction(
+    "initials", str, (Expr(str),), lambda value: func.substr(value, 1, 1),
+    nullable=Nullability.PROPAGATE, result_field=describe(),
+)
+```
 
 #### Access rules
 

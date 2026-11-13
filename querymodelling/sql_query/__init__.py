@@ -69,6 +69,7 @@ Modules:
 * :mod:`.unions` - the discriminated unions of the expressions,
 * :mod:`.scope` - model instances and the resolution of fields,
 * :mod:`.query` - validation, compilation into SQL and typed results,
+* :mod:`.results` - type, nullability and field information of results,
 * :mod:`.builder` - generation of the query models.
 """
 from .access import (
@@ -112,23 +113,26 @@ from .references import (
     SqlModelInfo, SqlQueryContext, collect_models, collect_references,
     default_model_name, model_references
 )
+from .results import (
+    DESCRIPTIVE_ATTRIBUTES, RESULT_FIELD_ATTRIBUTES, Nullability,
+    ResultFieldRule, SqlResultField, SqlResultInfo, describe, inherit
+)
 from .scope import SqlInstance, SqlQueryConfig, resolve_instance
 
 __all__ = [
-    "INVISIBLE", "VISIBLE", "FieldUsage", "RowsRule", "Rule",
-    "SqlFieldAccess", "SqlModelAccess", "ModelUsage", "SqlAccessDenied",
-    "resolve_rule", "SqlQueryModel", "SqlQueryModelBuilder",
-    "build_query_model", "AND", "CONTAINS", "ENDSWITH", "EXISTS",
-    "ICONTAINS", "IENDSWITH", "ILIKE", "IS_NOT_NULL", "IS_NULL",
-    "ISTARTSWITH", "LIKE", "NOT", "NOT_LIKE", "OR", "STARTSWITH",
-    "DEFAULT_CONDITION_GENERATORS", "comparison", "comparison_conditions",
-    "logical_conditions", "null_conditions", "string_conditions",
-    "SqlQueryFactory", "access_signature", "LABEL_MAX_LENGTH",
-    "RESERVED_KEYS", "Expr", "Label", "Many", "Query", "SqlAliasReference",
-    "SqlExpressionBase", "SqlExpressionFunction", "SqlFieldExpression",
-    "SqlFunctionExpression", "SqlQueryExpression", "CAST_TYPES", "CASTS",
-    "CONCAT", "COUNT", "COUNT_DISTINCT", "DATE", "DAY",
-    "DEFAULT_VALUE_FUNCTION_GENERATORS", "HOUR", "LENGTH", "LOWER",
+    "INVISIBLE", "VISIBLE", "FieldUsage", "ModelUsage", "RowsRule", "Rule",
+    "SqlAccessDenied", "SqlFieldAccess", "SqlModelAccess", "resolve_rule",
+    "SqlQueryModel", "SqlQueryModelBuilder", "build_query_model", "AND",
+    "CONTAINS", "ENDSWITH", "EXISTS", "ICONTAINS", "IENDSWITH", "ILIKE",
+    "IS_NOT_NULL", "IS_NULL", "ISTARTSWITH", "LIKE", "NOT", "NOT_LIKE",
+    "OR", "STARTSWITH", "DEFAULT_CONDITION_GENERATORS", "comparison",
+    "comparison_conditions", "logical_conditions", "null_conditions",
+    "string_conditions", "LABEL_MAX_LENGTH", "RESERVED_KEYS", "Expr",
+    "Label", "Many", "Query", "SqlAliasReference", "SqlExpressionBase",
+    "SqlExpressionFunction", "SqlFieldExpression", "SqlFunctionExpression",
+    "SqlQueryExpression", "SqlQueryFactory", "access_signature",
+    "CAST_TYPES", "CASTS", "CONCAT", "COUNT", "COUNT_DISTINCT", "DATE",
+    "DAY", "DEFAULT_VALUE_FUNCTION_GENERATORS", "HOUR", "LENGTH", "LOWER",
     "MINUTE", "MONTH", "NUMERIC_EXPRESSION_TYPES",
     "ORDERED_EXPRESSION_TYPES", "REPLACE", "SUBSTRING", "TRIM", "UPPER",
     "YEAR", "ExpressionFunctionGenerator",
@@ -140,9 +144,11 @@ __all__ = [
     "DEFAULT_TYPE_ORDER", "SqlExpressionMapping",
     "default_sql_expression_mapping", "function_key", "is_scalar_type",
     "ACCESS_CONTEXT_KEY", "SqlJoin", "SqlQuery", "SqlQueryBase",
-    "SqlQueryColumn", "SqlSubquery", "DEFAULT_REFERENCE_GENERATORS",
-    "ReferenceGenerator", "SqlFieldReference", "SqlModelInfo",
-    "SqlQueryContext", "collect_models", "collect_references",
-    "default_model_name", "model_references", "SqlInstance",
-    "SqlQueryConfig", "resolve_instance",
+    "SqlQueryColumn", "SqlSubquery", "DESCRIPTIVE_ATTRIBUTES",
+    "RESULT_FIELD_ATTRIBUTES", "Nullability", "ResultFieldRule",
+    "SqlResultField", "SqlResultInfo", "describe", "inherit",
+    "DEFAULT_REFERENCE_GENERATORS", "ReferenceGenerator",
+    "SqlFieldReference", "SqlModelInfo", "SqlQueryContext",
+    "collect_models", "collect_references", "default_model_name",
+    "model_references", "SqlInstance", "SqlQueryConfig", "resolve_instance",
 ]

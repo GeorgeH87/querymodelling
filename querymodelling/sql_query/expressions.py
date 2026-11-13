@@ -11,9 +11,13 @@ a constant, an object is an expression identified by its keys:
 * ``{<function>: <arguments>}`` - a function.
 """
 from dataclasses import dataclass
-from typing import Annotated, Any, Callable, ClassVar, Iterator, Optional
+from typing import (
+    Annotated, Any, Callable, ClassVar, Iterator, Optional, Union
+)
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from .results import Nullability, ResultFieldRule
 
 
 RESERVED_KEYS = frozenset({
@@ -68,7 +72,13 @@ class SqlExpressionFunction:
         arguments are optional if lower.
     :param variadic: The (single) argument may be repeated (JSON list).
     :param aggregate: Aggregate function (requires grouping).
-    :param nullable: The result may be ``NULL``.
+    :param nullable: When the result may be ``NULL``, a
+        :class:`Nullability` (``True`` / ``False`` for always / never),
+        defaults to ``NULL`` if any argument may be ``NULL``.
+    :param result_field: Field information of the result (title,
+        description, constraints) from the field information of the
+        arguments, e.g. :func:`~.results.inherit`. Without a rule the result
+        has no field information.
     """
 
     name: str
@@ -78,8 +88,13 @@ class SqlExpressionFunction:
     min_args: Optional[int] = None
     variadic: bool = False
     aggregate: bool = False
-    nullable: bool = True
+    nullable: Union[bool, Nullability] = Nullability.PROPAGATE
+    result_field: Optional[ResultFieldRule] = None
     description: Optional[str] = None
+
+    @property
+    def nullability(self) -> Nullability:
+        return Nullability.of(self.nullable)
 
     @property
     def required_args(self) -> int:

@@ -1,11 +1,11 @@
 """Runtime of the generated query models: validation, labels, compilation
 into SQL and typed results. Subqueries share the structure of the query."""
 import re
-from typing import Any, ClassVar, NamedTuple, Optional
+from typing import Any, ClassVar, NamedTuple
 
 from pydantic import (
-    BaseModel, ConfigDict, Field, PrivateAttr, ValidationInfo, create_model,
-    model_validator
+    BaseModel, ConfigDict, PrivateAttr, TypeAdapter, ValidationInfo,
+    create_model, model_validator
 )
 from sqlalchemy import literal, literal_column, select
 from sqlalchemy.orm import join as orm_join
@@ -18,6 +18,7 @@ from .expressions import (
     SqlFieldExpression, SqlFunctionExpression, SqlQueryExpression,
     contains_aggregate, contains_alias
 )
+from .results import SqlResultField, SqlResultInfo, function_nullable
 from .scope import (
     Scopes, SqlInstance, SqlQueryConfig, reference_label, resolve_instance
 )
@@ -299,22 +300,47 @@ class SqlQueryBase(SqlQueryExpression):
                 "group_by or be used within an aggregate function"
             )
 
-    def annotation(self, value: Any, scopes: Scopes) -> Any:
-        """The result type of an expression."""
+    def result_info(self, value: Any, scopes: Scopes) -> SqlResultInfo:
+        """Type, nullability and field information of the result of an
+        expression (known without executing the query)."""
         if isinstance(value, SqlFieldExpression):
             instance = resolve_instance(value, scopes)
-            annotation = instance.info.references[
-                value.field].result_annotation
-            return Optional[annotation] if instance.nullable else annotation
+            reference = instance.info.references[value.field]
+            return SqlResultInfo.of_annotation(
+                reference.result_annotation,
+                SqlResultField.from_field_info(reference.field_info),
+                instance.nullable,
+            )
         if isinstance(value, SqlFunctionExpression):
             function = value.__sql_function__
-            if function.nullable:
-                return Optional[function.result_type]
-            return function.result_type
+            arguments = [
+                self.result_info(item, scopes)
+                for spec, argument in value.sql_arguments()
+                if isinstance(spec, Expr)
+                for item in (
+                    argument if isinstance(argument, list) else [argument])
+            ]
+            field = (
+                function.result_field([a.field for a in arguments])
+                if function.result_field else SqlResultField()
+            )
+            return SqlResultInfo(
+                function.result_type,
+                function_nullable(function.nullability, arguments),
+                field,
+            )
         if isinstance(value, SqlQueryBase):
-            return Optional[value.annotation(
-                value.fields[0], (value.instances(), *scopes))]
-        return type(value)
+            info = value.result_info(
+                value.fields[0], (value.instances(), *scopes))
+            # an aggregate without grouping always returns exactly one row
+            single_row = not value.group_by and contains_aggregate(
+                value.fields[0])
+            return info if single_row else info.with_nullable()
+        return SqlResultInfo(type(value), nullable=False)
+
+    def annotation(self, value: Any, scopes: Scopes) -> Any:
+        """The result type of an expression."""
+        return self.result_info(value, scopes).result_annotation
 
     def compile_expression(self, value: Any, scopes: Scopes) -> Any:
         """Compiles an expression into a SQL expression."""
@@ -408,26 +434,45 @@ class SqlQuery(SqlQueryBase):
             for item, label in zip(self.selected(), self.labels())
         ]
 
-    def result_model(self) -> type[BaseModel]:
-        """Typed model of a result row (cached per column signature)."""
+    def result_infos(self) -> dict[str, SqlResultInfo]:
+        """The result information of the columns by their label."""
         scopes = (self.instances(),)
-        signature = tuple(
-            (label, self.annotation(item, scopes))
+        return {
+            label: self.result_info(item, scopes)
             for item, label in zip(self.selected(), self.labels())
+        }
+
+    def result_model(self) -> type[BaseModel]:
+        """Typed model of a result row, known without executing the query
+        (cached per column signature)."""
+        infos = self.result_infos()
+        signature = tuple(
+            (label, info.result_annotation, repr(info.field))
+            for label, info in infos.items()
         )
         config = self.__sql_query_config__
         if signature not in config.result_models:
             fields, used = {}, set()
-            for label, annotation in signature:
+            for label, info in infos.items():
                 python_name = _python_name(label, used)
                 fields[python_name] = (
-                    annotation, Field(alias=_alias(python_name, label)))
+                    info.result_annotation,
+                    info.field.field_info(_alias(python_name, label)),
+                )
             config.result_models[signature] = create_model(
                 config.result_name,
                 __config__=ConfigDict(populate_by_name=True),
                 **fields,
             )
         return config.result_models[signature]
+
+    def result_schema(self, many: bool = True, **kwargs) -> dict[str, Any]:
+        """JSON schema of the result rows (of a single row if not
+        ``many``), known without executing the query."""
+        model = self.result_model()
+        if not many:
+            return model.model_json_schema(by_alias=True, **kwargs)
+        return TypeAdapter(list[model]).json_schema(by_alias=True, **kwargs)
 
     def fetch(self, session: Any) -> list[BaseModel]:
         """Executes the query and returns typed result rows."""

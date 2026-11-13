@@ -33,13 +33,15 @@ class SqlFieldReference:
     if the field can only be selected), ``column`` an attribute name on the
     source, a callable receiving the source or a column expression.
     ``access`` is an access rule (the rule of the field it is generated from
-    if ``None``), after collection it is the resolved :class:`FieldUsage`."""
+    if ``None``), after collection it is the resolved :class:`FieldUsage`.
+    ``field_info`` is copied to the result columns selecting the field."""
 
     name: str
     annotation: Any
     column: Any
     result_annotation: Any = None
     access: Rule[FieldUsage, Any] = None
+    field_info: Optional[FieldInfo] = None
 
     def resolve(self, source: Any) -> Any:
         return resolve_expression(self.column, source)
@@ -88,6 +90,7 @@ def model_references(
         ),
         column=name,
         result_annotation=field_info.annotation,
+        field_info=field_info,
     )
 
 
