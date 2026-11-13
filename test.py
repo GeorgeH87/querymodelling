@@ -44,7 +44,7 @@ class ExampleModel(SQLModel, registry=registry()):
 
 class Author(ExampleModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
-    name: str
+    name: str = Field(description="Full name of the author")
     # only admins may use the email in any way
     email: Annotated[str, SqlFieldAccess[User](lambda user: user.is_admin)]
 
@@ -57,8 +57,11 @@ class Book(ExampleModel, table=True):
     )
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    title: str
-    price: float
+    # field information is copied to the result schema of queries
+    title: str = Field(
+        title="Book title", max_length=200,
+        schema_extra={"examples": ["Momo"]})
+    price: float = Field(ge=0, description="Sales price in EUR")
     # purchase cost: admins may do everything, others only aggregate it
     cost: Annotated[float, SqlFieldAccess[User](lambda user: (
         FieldUsage.ALL if user.is_admin else FieldUsage.AGGREGATE))]
@@ -279,6 +282,45 @@ def without_access_to_the_queried_model():
         print(f"SqlAccessDenied: {error}")
 
 
+def result_schema():
+    section("8. Result schema of a query - without executing it")
+    query = queries.validate({
+        "joins": [{
+            "model": "author",
+            "type": "left",
+            "on": {"eq": [field("book", "author_id"), field("author", "id")]},
+        }],
+        "fields": [
+            field("book", "title"),
+            field("author", "name", alias="author"),
+            {"lower": field("book", "title"), "alias": "lower_title"},
+            {"length": field("book", "title"), "alias": "title_length"},
+            {"max": field("book", "price"), "alias": "max_price"},
+            {"coalesce": [field("author", "name"), "unknown"],
+             "alias": "author_or_unknown"},
+            {"gt": [field("book", "price"), 10], "alias": "expensive"},
+            {
+                "model": "review",
+                "fields": [{"count": "*"}],
+                "where": {"eq": [
+                    field("review", "book_id"), field("book", "id")]},
+                "alias": "reviews",
+            },
+        ],
+        "group_by": [
+            field("book", "id"), field("book", "title"),
+            field("book", "price"), field("author", "name"),
+        ],
+    }, READER)
+
+    print("typed row model:")
+    for name, info in query.result_model().model_fields.items():
+        print(f"  {name}: {info.annotation}")
+
+    print("\nJSON schema of a row:")
+    print(json.dumps(query.result_schema(many=False), indent=2))
+
+
 def main():
     create_data()
     schema_per_user()
@@ -288,6 +330,7 @@ def main():
     denied_queries()
     without_context()
     without_access_to_the_queried_model()
+    result_schema()
 
 
 if __name__ == "__main__":
